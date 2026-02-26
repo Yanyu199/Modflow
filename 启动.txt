@@ -1,0 +1,6 @@
+前端：
+pnpm run dev
+
+后端：
+conda activate geoenv
+python app.py
