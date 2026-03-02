@@ -10,7 +10,12 @@
         <template slot="title">
           <span class="step-title"><i class="el-icon-files"></i> Step 3: 地层结构</span>
         </template>
-        <LayerPanel :totalLayers="gridConfig.n_layers || 1" @layer-changed="$emit('layer-changed')" />
+        <LayerPanel 
+          :totalLayers="gridConfig.n_layers || 1" 
+          @layer-changed="$emit('layer-changed')" 
+          @model-ready="$emit('model-ready', $event)" 
+          @preview-boreholes="$emit('preview-boreholes', $event)"
+        />
       </el-collapse-item>
 
       <el-collapse-item name="4">

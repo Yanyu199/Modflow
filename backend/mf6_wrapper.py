@@ -13,6 +13,7 @@ if not os.path.exists(MF6_EXE_PATH):
 # ⭐ MODPATH 7 路径
 MP7_EXE_PATH = r"G:\workspace\flopy-project\modpath7\bin\mpath7.exe"
 
+
 class MF6Builder:
     def __init__(self, run_id, work_dir):
         self.run_id = run_id
@@ -23,8 +24,10 @@ class MF6Builder:
     def initialize_sim(self):
         self.sim = flopy.mf6.MFSimulation(sim_name='sim', exe_name=MF6_EXE_PATH, sim_ws=self.work_dir)
         flopy.mf6.ModflowTdis(self.sim, nper=1, perioddata=[(1.0, 1, 1.0)], time_units='DAYS')
+        # 求解器保持复杂模式
         flopy.mf6.ModflowIms(self.sim, complexity='COMPLEX', outer_maximum=1000, inner_maximum=200)
-        self.gwf = flopy.mf6.ModflowGwf(self.sim, modelname='gwf', save_flows=True)
+        # ⭐ 核心防崩修复 1：在创建 GWF 模型时，直接传入 newtonoptions='NEWTON' 开启牛顿-拉夫逊迭代
+        self.gwf = flopy.mf6.ModflowGwf(self.sim, modelname='gwf', save_flows=True, newtonoptions='NEWTON')
 
     def setup_dis(self, nlay, nrow, ncol, delr, delc, top, botm, idomain, origin_x, origin_y):
         flopy.mf6.ModflowGwfdis(self.gwf, length_units='METERS', nlay=nlay, nrow=nrow, ncol=ncol,
@@ -37,15 +40,20 @@ class MF6Builder:
             for cell in k_cells:
                 r, c, l, v = int(cell['row']), int(cell['col']), cell.get('layer'), float(cell['k_val'])
                 if 0 <= r < nrow and 0 <= c < ncol:
-                    if l is not None and 0 <= int(l) < nlay: k_array[int(l), r, c] = v
-                    else: k_array[:, r, c] = v
+                    if l is not None and 0 <= int(l) < nlay:
+                        k_array[int(l), r, c] = v
+                    else:
+                        k_array[:, r, c] = v
+        # 你原本就已经加上了 icelltype=1，保持不变，非常正确！
         flopy.mf6.ModflowGwfnpf(self.gwf, k=k_array, save_specific_discharge=True, icelltype=1)
 
-    def setup_boundary_conditions(self, active_2d, custom_boundaries, wells, rch_array, evt_array, top_layer, grid_info):
+    def setup_boundary_conditions(self, active_2d, custom_boundaries, wells, rch_array, evt_array, top_layer,
+                                  grid_info):
         nrow, ncol = active_2d.shape
         origin_x, origin_y = grid_info['origin_x'], grid_info['origin_y']
         delr, delc = grid_info['delr'], grid_info['delc']
         chd_data, riv_data, drn_data, ghb_data = [], [], [], []
+
         for b_cfg in custom_boundaries:
             p1, p2 = b_cfg['p1'], b_cfg['p2']
             line = LineString([(p1['x'], p1['y']), (p2['x'], p2['y'])])
@@ -57,34 +65,55 @@ class MF6Builder:
                     if line.distance(Point(cx, cy)) < (delr + delc) / 4:
                         ratio = line.project(Point(cx, cy)) / line.length if line.length > 0 else 0.0
                         if b_type == 'CHD':
-                            chd_data.append([(0, i, j), float(b_cfg.get('head_start', 10)) + (float(b_cfg.get('head_end', 10)) - float(b_cfg.get('head_start', 10))) * ratio])
+                            chd_data.append([(0, i, j), float(b_cfg.get('head_start', 10)) + (
+                                        float(b_cfg.get('head_end', 10)) - float(b_cfg.get('head_start', 10))) * ratio])
                         elif b_type == 'RIV':
-                            stg = float(b_cfg.get('stage_start', 10)) + (float(b_cfg.get('stage_end', 10)) - float(b_cfg.get('stage_start', 10))) * ratio
+                            stg = float(b_cfg.get('stage_start', 10)) + (
+                                        float(b_cfg.get('stage_end', 10)) - float(b_cfg.get('stage_start', 10))) * ratio
                             riv_data.append([(0, i, j), stg, 100, 5])
+
+        # ⭐ 核心防崩修复 2：剥离 IC（初始条件）包与 CHD 的绑定逻辑
+        # 无论有没有设置定水头边界，初始水位 (strt) 都必须强制设为地表的真实标高 (top_layer)
+        # 这样确保模型一启动时整个含水层都是饱水的，MF6 计算几轮后会自动降落到真实水位。
+        nlay = self.gwf.modelgrid.nlay
+        strt_3d = [top_layer] * nlay
+        flopy.mf6.ModflowGwfic(self.gwf, strt=strt_3d)
+
         if chd_data:
-            flopy.mf6.ModflowGwfic(self.gwf, strt=np.mean([x[1] for x in chd_data]))
             flopy.mf6.ModflowGwfchd(self.gwf, stress_period_data={0: chd_data})
-        else:
-            flopy.mf6.ModflowGwfic(self.gwf, strt=top_layer)
-        if riv_data: flopy.mf6.ModflowGwfriv(self.gwf, stress_period_data={0: riv_data})
+
+        if riv_data:
+            flopy.mf6.ModflowGwfriv(self.gwf, stress_period_data={0: riv_data})
+
         wel_spd = [[(int(w.get('layer', 0)), int(w['row']), int(w['col'])), float(w['rate'])] for w in wells]
-        if wel_spd: flopy.mf6.ModflowGwfwel(self.gwf, stress_period_data={0: wel_spd})
-        if np.any(rch_array > 0): flopy.mf6.ModflowGwfrcha(self.gwf, recharge={0: rch_array})
-        if np.any(evt_array > 0): flopy.mf6.ModflowGwfevta(self.gwf, surface=top_layer, rate=evt_array, depth=2.0)
-        flopy.mf6.ModflowGwfoc(self.gwf, head_filerecord='gwf.hds', budget_filerecord='gwf.bud', saverecord=[('HEAD', 'ALL'), ('BUDGET', 'ALL')])
+        if wel_spd:
+            flopy.mf6.ModflowGwfwel(self.gwf, stress_period_data={0: wel_spd})
+
+        if np.any(rch_array > 0):
+            flopy.mf6.ModflowGwfrcha(self.gwf, recharge={0: rch_array})
+
+        if np.any(evt_array > 0):
+            flopy.mf6.ModflowGwfevta(self.gwf, surface=top_layer, rate=evt_array, depth=2.0)
+
+        flopy.mf6.ModflowGwfoc(self.gwf, head_filerecord='gwf.hds', budget_filerecord='gwf.bud',
+                               saverecord=[('HEAD', 'ALL'), ('BUDGET', 'ALL')])
 
     def run(self):
         self.sim.write_simulation()
-        return self.sim.run_simulation(silent=True)
+        # ⭐ 将 silent 改为 False，强制暴露 Fortran 引擎的原生报错！
+        return self.sim.run_simulation(silent=False)
 
     def run_modpath(self, start_points):
         try:
-            mp = flopy.modpath.Modpath7(modelname='mp', flowmodel=self.gwf, exe_name=MP7_EXE_PATH, model_ws=self.work_dir)
+            mp = flopy.modpath.Modpath7(modelname='mp', flowmodel=self.gwf, exe_name=MP7_EXE_PATH,
+                                        model_ws=self.work_dir)
             pdata = flopy.modpath.ParticleData(start_points, drape=0)
             pg = flopy.modpath.ParticleGroup(particlegroupname='PG1', particledata=pdata)
             flopy.modpath.Modpath7Bas(mp, porosity=0.3)
-            flopy.modpath.Modpath7Sim(mp, simulationtype='pathline', trackingdirection='forward', weaksinkoption='pass_through', particlegroups=[pg])
+            flopy.modpath.Modpath7Sim(mp, simulationtype='pathline', trackingdirection='forward',
+                                      weaksinkoption='pass_through', particlegroups=[pg])
             mp.write_input()
             return mp.run_model(silent=True)
         except Exception as e:
-            print(f"MODPATH Error: {e}"); return False, []
+            print(f"MODPATH Error: {e}");
+            return False, []

@@ -4,3 +4,13 @@ pnpm run dev
 后端：
 conda activate geoenv
 python app.py
+
+git推送代码：
+git add .
+git commit -m "写清楚这次改了什么"
+git push
+
+git status建议在 git add . 之前敲一下这个命令。它会用红字标出你修改过、但还没保存的文件，让你心里有数。
+强制回退到git版本（改错的时候用）
+git fetch origin
+git reset --hard origin/main

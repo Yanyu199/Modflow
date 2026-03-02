@@ -62,67 +62,6 @@ def generate_grid_info(params, boundary_coords):
         "grid_x": grid_x, "grid_y": grid_y,
         "polygon": polygon
     }
-
-
-def compute_layer_elevations(nlay, nrow, ncol, layer_cache, grid_x, grid_y, default_thick=10.0):
-    """
-    计算每一层的顶底板高程 (包含非底层自动衔接逻辑)
-    """
-
-    def interp(pts_list, base_arr):
-        if not pts_list or len(pts_list) < 3: return base_arr
-        pts = np.array(pts_list)
-        try:
-            res = griddata(pts[:, 0:2], pts[:, 2], (grid_x, grid_y), method='linear')
-            if np.any(np.isnan(res)):
-                mask = np.isnan(res)
-                res[mask] = griddata(pts[:, 0:2], pts[:, 2], (grid_x[mask], grid_y[mask]), method='nearest')
-            return res
-        except:
-            return base_arr
-
-    top_arrays = []
-    bot_arrays = []
-    current_top_ref = np.full((nrow, ncol), 10.0)
-
-    for k in range(nlay):
-        # --- 1. Top ---
-        curr_layer_data = layer_cache.get(k) or layer_cache.get(str(k)) or {}
-        if curr_layer_data.get('top'):
-            lay_top = interp(curr_layer_data['top'], current_top_ref)
-        else:
-            if k == 0:
-                lay_top = current_top_ref.copy()
-            else:
-                lay_top = bot_arrays[k - 1].copy() if bot_arrays else current_top_ref.copy()
-
-        top_arrays.append(lay_top)
-
-        # --- 2. Bottom ---
-        lay_bot = None
-        if k < nlay - 1:
-            # 中间层：底 = 下一层顶
-            next_layer_data = layer_cache.get(k + 1) or layer_cache.get(str(k + 1)) or {}
-            if next_layer_data.get('top'):
-                lay_bot = interp(next_layer_data['top'], lay_top - default_thick)
-            else:
-                lay_bot = lay_top - default_thick
-        else:
-            # 最底层：底 = 本层底文件
-            if curr_layer_data.get('bottom'):
-                lay_bot = interp(curr_layer_data['bottom'], lay_top - default_thick)
-            else:
-                lay_bot = lay_top - default_thick
-
-        # 几何修正
-        thick = lay_top - lay_bot
-        invalid = thick < 0.1
-        if np.any(invalid): lay_bot[invalid] = lay_top[invalid] - 0.1
-        bot_arrays.append(lay_bot)
-
-    return top_arrays, bot_arrays
-
-
 def map_zones_to_grid(zones, nrow, ncol, active_2d, grid_centers):
     """
     将矢量分区 (RCH/EVT) 映射到网格数组

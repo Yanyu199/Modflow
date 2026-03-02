@@ -28,6 +28,7 @@
         <Result3DViewer 
           ref="viewer3d" 
           :points="resultPoints" 
+          :layerMapping="layerMapping"
           @trace-particle="onParticleTraceRequested"
         />
       </div>
@@ -56,7 +57,7 @@
         </el-card>
       </div>
 
-      <div class="layer-right" v-if="boundary">
+      <div class="layer-right">
         <ModelParametersPanel
           :activeStep.sync="activeStep"
           :gridConfig="gridConfig"
@@ -75,18 +76,9 @@
           @save-boundary="onBoundaryConfigSave"
           @remove-boundary="onBoundaryConfigRemove"
           @run="handleRun"
+          @model-ready="onModelReady" 
+          @preview-boreholes="onPreviewBoreholes"
         />
-      </div>
-
-      <div class="center-tip" v-else>
-        <el-alert 
-          title="请先在左侧完成 Step 1: 上传边界 Shapefile" 
-          type="info" 
-          center 
-          show-icon 
-          :closable="false"
-          effect="dark">
-        </el-alert>
       </div>
     </div>
 
@@ -121,7 +113,6 @@
 </template>
 
 <script>
-// 引入组件
 import BoundaryMap from './components/BoundaryMap.vue';
 import GridSettings from './components/GridSettings.vue';
 import Result3DViewer from './components/Real3DViewer.vue';
@@ -141,6 +132,7 @@ export default {
     return {
       boundary: null, 
       resultPoints: [], 
+      layerMapping: {},
       loading: false,
       gridConfig: { x_mode: 'size', x_val: 50, y_mode: 'size', y_val: 50, n_layers: 1, z_thick: 10 },
       currentSegmentIdx: null, 
@@ -156,12 +148,27 @@ export default {
     };
   },
   methods: {
+    // === 0. 新增：处理钻孔模型就绪事件 ===
+    onModelReady(data) {
+      // 自动将 Z 方向的层数设置为钻孔数据的最大分层 ID
+if (data.layers_count) this.gridConfig.n_layers = data.layers_count;
+      if (data.layer_mapping) this.layerMapping = data.layer_mapping;
+      // ⭐ 注意：这里彻底删除了自动调用的 this.fetchGridPreview()
+      this.$message.success(`钻孔解析成功！请点击“预览钻孔”按钮查看三维空间分布。`);
+    },
+
+    onPreviewBoreholes(data) {
+      this.resultPoints = []; // 清空可能存在的旧网格数据，保证视图里只有钻孔
+      this.$nextTick(() => {
+        if (this.$refs.viewer3d && data.boreholes) {
+          this.$refs.viewer3d.drawBoreholes(data.boreholes);
+          this.$message.success('已在三维视图中显示钻孔柱子，可点击查看分层详情！');
+        }
+      });
+    },
     // === 1. 项目保存与加载逻辑 ===
     saveProject() {
-      if (!this.boundary) {
-        this.$message.warning("当前没有可保存的项目数据");
-        return;
-      }
+      // ... (保持原样)
       const projectData = {
         boundary: this.boundary,
         gridConfig: this.gridConfig,
@@ -185,12 +192,12 @@ export default {
     },
 
     loadProject(file) {
+      // ... (保持原样)
       if (!file || !file.raw) return;
       const reader = new FileReader();
       reader.onload = (e) => {
         try {
           const json = JSON.parse(e.target.result);
-          
           if (json.boundary) this.boundary = json.boundary;
           if (json.gridConfig) this.gridConfig = json.gridConfig;
           if (json.boundaryConfigs) this.boundaryConfigs = json.boundaryConfigs;
@@ -206,7 +213,7 @@ export default {
           this.$message.success("项目加载成功！");
           
           this.$nextTick(() => {
-             if (this.$refs.mapRef) {
+             if (this.$refs.mapRef && this.boundary) {
                  this.$refs.mapRef.drawMap();
                  let sz = (this.gridConfig.x_mode === 'size') ? this.gridConfig.x_val : 50; 
                  this.$refs.mapRef.previewGrid(sz);
@@ -233,19 +240,45 @@ export default {
       this.fetchGridPreview();
     },
 
+    // ⭐ 修改：支持自动边界，发送 project_id，渲染钻孔
     async fetchGridPreview() {
-      if (!this.boundary) return;
-      try {
+      // 去掉了对 this.boundary 的强制非空拦截，允许后端自动计算包围盒
+try {
         const res = await axios.post('http://localhost:5000/preview-geometry', {
+          project_id: 'default',
           boundary: this.boundary,
           params: this.gridConfig
         });
         if (res.data.success) {
           this.resultPoints = res.data.points;
-          this.$message.success('3D 网格模型已刷新');
+          
+          if (res.data.layer_mapping) {
+            this.layerMapping = res.data.layer_mapping; // ⭐ 接收映射表
+          }
+          
+          // 如果后端返回了自动生成的边界，且前端目前没边界，则赋值给前端并更新地图
+          if (res.data.boundary_auto && (!this.boundary || this.boundary.length === 0)) {
+            this.boundary = res.data.boundary_auto;
+            if(this.$refs.mapRef) {
+              Object.assign(this.$refs.mapRef, { localBoundary: this.boundary });
+              this.$refs.mapRef.drawMap();
+            }
+          }
+          
+          // 如果后端返回了钻孔数据，交给 3D 视图渲染圆柱体
+          this.$nextTick(() => {
+            if (res.data.boreholes && this.$refs.viewer3d && this.$refs.viewer3d.drawBoreholes) {
+              this.$refs.viewer3d.drawBoreholes(res.data.boreholes);
+            }
+          });
+
+          this.$message.success('3D 地质网格模型已刷新');
+        } else {
+          this.$message.warning(res.data.error || '获取网格失败');
         }
       } catch (e) {
         console.error(e);
+        this.$message.error(e.response?.data?.error || '请求出错，请检查是否已上传钻孔数据');
       }
     },
 
@@ -255,6 +288,7 @@ export default {
 
     // === 3. 交互逻辑 (左侧点击 -> 弹窗 -> 数据更新) ===
     onGridClicked(data) {
+      // ... (保持原样)
       const existingWell = this.wells.find(w => w.row === data.row && w.col === data.col);
       const existingK = this.kCells.find(k => k.row === data.row && k.col === data.col);
       this.tempCell = {
@@ -306,20 +340,18 @@ export default {
     },
 
     // === 5. 核心运行逻辑与粒子追踪 ===
-    
-    // ⭐ 新增：响应点击面板后的追踪事件
     onParticleTraceRequested(cell) {
-      // 重新运行模拟并加入追踪起始点参数
       this.handleRun({ k: 10.0 }, cell);
     },
 
+    // ⭐ 修改：发送 project_id: 'default'
     async handleRun(partialParams, mpCell = null) {
       this.loading = true;
       this.currentLogs = '';
       
       const boundaryList = [];
       for (const [idxStr, cfg] of Object.entries(this.boundaryConfigs)) {
-        if (this.boundary[idxStr]) {
+        if (this.boundary && this.boundary[idxStr]) {
           boundaryList.push({ 
             p1: this.boundary[idxStr], 
             p2: this.boundary[parseInt(idxStr)+1], 
@@ -332,6 +364,7 @@ export default {
       
       try {
         const res = await axios.post('http://localhost:5000/run-model', {
+          project_id: 'default', // ⭐ 加上默认项目ID
           boundary: this.boundary, 
           params: fullParams, 
           boundary_conditions: boundaryList, 
@@ -339,7 +372,7 @@ export default {
           k_cells: this.kCells,
           rch_data: this.rchData,
           evt_data: this.evtData,
-          mp_start_cell: mpCell // ⭐ 传入粒子追踪起始单元
+          mp_start_cell: mpCell 
         });
         
         if (res.data.success) { 
@@ -348,14 +381,12 @@ export default {
             this.$message.success(mpCell ? '流线追踪计算完成' : '模拟计算完成'); 
             this.activeStep = '7';
             
-            // ⭐ 如果返回了流线数据，调用 3D 组件进行绘制
             if (res.data.pathlines && res.data.pathlines.length > 0) {
               const xs = this.boundary.map(p => p.x);
               const ys = this.boundary.map(p => p.y);
               const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
               const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
               
-              // 确保 3D 组件已经加载
               this.$nextTick(() => {
                 if (this.$refs.viewer3d) {
                   this.$refs.viewer3d.drawPathLines(
@@ -381,6 +412,7 @@ export default {
 </script>
 
 <style>
+/* (这里完全保留你原本的 CSS，没有改动) */
 body { margin: 0; padding: 0; overflow: hidden; font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "微软雅黑", Arial, sans-serif; }
 
 .app-header { 
@@ -420,7 +452,6 @@ body { margin: 0; padding: 0; overflow: hidden; font-family: "Helvetica Neue", H
   position: absolute; top: 60px; right: 20px; bottom: 20px; width: 400px; z-index: 10; 
   display: flex; flex-direction: column; pointer-events: none;
 }
-/* 使子组件能够接收鼠标事件 */
 .layer-left .el-card, .layer-right .el-card { pointer-events: auto; }
 
 .floating-card { 

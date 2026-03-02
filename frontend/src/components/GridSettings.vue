@@ -30,21 +30,11 @@
         </el-form>
       </el-tab-pane>
 
-      <el-tab-pane label="Z轴 (垂向)" name="z">
-        <el-form size="mini" label-position="top">
-          <el-form-item label="1. 搭建多少层 (Layers)">
-            <el-input-number v-model="config.n_layers" :min="1" :max="20" style="width: 100%"></el-input-number>
-          </el-form-item>
-          <el-form-item label="2. 默认单层厚度 (m)">
-            <el-input-number v-model="config.z_thick" :min="0.1" :step="1" style="width: 100%"></el-input-number>
-            <div style="font-size:12px; color:#999; line-height:1.2; margin-top:5px;">
-              * 此为初始厚度。后续可通过"地层管理"导入SHP自动计算精确顶底板高程。
-            </div>
-          </el-form-item>
-        </el-form>
-      </el-tab-pane>
-
     </el-tabs>
+
+    <div style="font-size:12px; color:#67C23A; margin: 5px 0 10px 0; text-align: center;">
+      <i class="el-icon-circle-check"></i> Z 轴地层将由钻孔数据自动识别构建
+    </div>
 
     <div class="actions">
       <el-button type="primary" size="mini" plain style="width: 100%" @click="emitPreview">
@@ -59,8 +49,9 @@ export default {
   props: { value: Object },
   data() {
     return {
-      activeTab: 'z',
-      config: { x_mode: 'size', x_val: 1000, y_mode: 'size', y_val: 1000, n_layers: 5, z_thick: 100 }
+      activeTab: 'x', // 默认打开 X 轴面板
+      // 保留后端的 n_layers 和 z_thick 以防报错，但不再通过 UI 让用户手动填
+      config: { x_mode: 'size', x_val: 100, y_mode: 'size', y_val: 100, n_layers: 1, z_thick: 10 }
     };
   },
   watch: { config: { deep: true, handler(val) { this.$emit('input', val); } } },
@@ -73,4 +64,8 @@ export default {
   }
 };
 </script>
-<style scoped> .grid-settings { padding: 10px; background: #fff; } .actions { margin-top: 10px; } </style>
+
+<style scoped> 
+.grid-settings { padding: 10px; background: #fff; } 
+.actions { margin-top: 10px; } 
+</style>
