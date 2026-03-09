@@ -1,30 +1,61 @@
 <template>
-  <div class="layer-panel">
-    <h3>三维地层与钻孔数据</h3>
+  <div class="layer-panel-modern">
     
-    <div class="upload-section">
-      <div class="file-input-wrapper">
-        <label for="csv-upload" class="file-label">选择钻孔分层数据 (CSV)</label>
-        <input id="csv-upload" type="file" accept=".csv" @change="handleFileChange" ref="fileInput" />
-        <span class="file-name" v-if="selectedFile">{{ selectedFile.name }}</span>
+    <div class="upload-bar">
+      <el-upload
+        action=""
+        :auto-upload="false"
+        :on-change="handleFileChange"
+        :show-file-list="false"
+        accept=".csv"
+        class="upload-component"
+      >
+        <el-button size="small" type="primary" plain icon="el-icon-folder-opened">导入钻孔 CSV</el-button>
+      </el-upload>
+      <span class="tip" v-if="!selectedFile"><i class="el-icon-info"></i> 需含坐标与分层</span>
+      <span class="tip file-selected" v-else><i class="el-icon-document"></i> {{ selectedFile.name }}</span>
+    </div>
+
+    <el-button 
+      type="primary" 
+      size="small"
+      class="full-btn mt-10" 
+      @click="uploadBoreholes" 
+      :loading="isUploading" 
+      :disabled="!selectedFile"
+    >
+      <i class="el-icon-cpu"></i> {{ isUploading ? '正在解析地层数据...' : '解析地层并构建模型' }}
+    </el-button>
+
+    <transition name="el-fade-in-linear">
+      <div v-if="uploadResult" class="result-box mt-10">
+        <el-alert
+          title="地层解析成功"
+          :description="`共识别 ${uploadResult.boreholes_count} 个钻孔，地层 Z 轴已自动映射。`"
+          type="success"
+          show-icon
+          :closable="false"
+        ></el-alert>
+
+        <el-button 
+          type="success" 
+          plain
+          size="small"
+          class="full-btn mt-10" 
+          @click="$emit('preview-boreholes', uploadResult)" 
+        >
+          <i class="el-icon-view"></i> 在三维视图中预览钻孔
+        </el-button>
       </div>
+    </transition>
 
-      <button class="action-btn upload-btn" @click="uploadBoreholes" :disabled="!selectedFile || isUploading">
-        {{ isUploading ? '正在解析...' : '第 1 步：上传并解析数据' }}
-      </button>
-    </div>
-
-    <div v-if="uploadResult" class="result-info">
-      <div class="success-msg">✅ 钻孔解析成功 (共 {{ uploadResult.boreholes_count }} 个)</div>
-      
-      <button class="action-btn preview-btn" @click="$emit('preview-boreholes', uploadResult)" style="margin-top: 10px; width: 100%;">
-        <i class="el-icon-view"></i> 第 2 步：在右侧三维中预览钻孔
-      </button>
-      
-      <p class="hint">提示：预览无误后，请前往上方 【Step 2: 网格离散化设置】 设置 XY 密度并生成最终模型。</p>
-    </div>
-
-    <div v-if="errorMessage" class="error-msg">❌ {{ errorMessage }}</div>
+    <el-alert
+      v-if="errorMessage"
+      :title="errorMessage"
+      type="error"
+      show-icon
+      class="mt-10"
+    ></el-alert>
   </div>
 </template>
 
@@ -33,18 +64,16 @@ import { ref } from 'vue';
 import axios from 'axios';
 
 const API_BASE_URL = 'http://localhost:5000'; 
-const fileInput = ref(null);
 const selectedFile = ref(null);
 const isUploading = ref(false);
 const uploadResult = ref(null);
 const errorMessage = ref('');
 
-// ⭐ 声明新增的事件
 const emit = defineEmits(['model-ready', 'preview-boreholes']);
 
-const handleFileChange = (e) => {
+const handleFileChange = (file) => {
   errorMessage.value = '';
-  if (e.target.files.length > 0) selectedFile.value = e.target.files[0];
+  selectedFile.value = file.raw;
 };
 
 const uploadBoreholes = async () => {
@@ -63,7 +92,6 @@ const uploadBoreholes = async () => {
     });
     if (response.data.success) {
       uploadResult.value = response.data;
-      // 仅传递数据准备好的信号，不再立刻触发网格生成
       emit('model-ready', response.data); 
     } else {
       errorMessage.value = '解析失败: ' + response.data.error;
@@ -77,21 +105,19 @@ const uploadBoreholes = async () => {
 </script>
 
 <style scoped>
-.layer-panel { padding: 15px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #e9ecef; margin-bottom: 15px; }
-h3 { margin-top: 0; margin-bottom: 15px; font-size: 16px; border-bottom: 2px solid #dee2e6; padding-bottom: 8px; }
-.upload-section { display: flex; flex-direction: column; gap: 12px; }
-.file-input-wrapper { display: flex; align-items: center; gap: 10px; }
-.file-label { background-color: #e9ecef; border: 1px solid #ced4da; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 14px; }
-input[type="file"] { display: none; }
-.file-name { font-size: 12px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.action-btn { padding: 8px 16px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; transition: all 0.2s; }
-.upload-btn { background-color: #0d6efd; color: white; }
-.upload-btn:hover:not(:disabled) { background-color: #0b5ed7; }
-/* 预览按钮的样式 */
-.preview-btn { background-color: #198754; color: white; }
-.preview-btn:hover { background-color: #157347; }
-.result-info { margin-top: 15px; padding: 12px; background-color: #d1e7dd; border: 1px solid #badbcc; border-radius: 6px; }
-.success-msg { font-weight: bold; color: #0f5132;}
-.hint { margin-top: 10px; font-size: 12px; color: #146c43; }
-.error-msg { margin-top: 15px; padding: 10px; background-color: #f8d7da; border-radius: 6px; color: #842029; font-size: 14px; }
+.layer-panel-modern { padding: 12px; }
+
+/* 与 Step 5 同款的操作条样式 */
+.upload-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  background: #f4f4f5; padding: 8px 10px; border-radius: 4px; border: 1px solid #e4e7ed;
+}
+.upload-component { line-height: 1; }
+.tip { font-size: 11px; color: #909399; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-selected { color: #409EFF; font-weight: bold; }
+
+/* 统一的按钮间距 */
+.full-btn { width: 100%; letter-spacing: 1px; font-weight: bold; }
+.mt-10 { margin-top: 10px; }
+.result-box { animation: fadeIn 0.4s; }
 </style>

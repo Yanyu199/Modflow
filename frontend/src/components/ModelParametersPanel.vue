@@ -8,19 +8,18 @@
       
       <el-collapse-item name="3">
         <template slot="title">
-          <span class="step-title"><i class="el-icon-files"></i> Step 3: 地层结构</span>
+          <span class="step-title"><i class="el-icon-s-grid"></i> Step 3: 网格离散化设置</span>
         </template>
-        <LayerPanel 
-          :totalLayers="gridConfig.n_layers || 1" 
-          @layer-changed="$emit('layer-changed')" 
-          @model-ready="$emit('model-ready', $event)" 
-          @preview-boreholes="$emit('preview-boreholes', $event)"
+        <GridSettings 
+          :value="gridConfig" 
+          @input="$emit('update:gridConfig', $event)" 
+          @preview="$emit('preview-grid', $event)" 
         />
       </el-collapse-item>
 
       <el-collapse-item name="4">
         <template slot="title">
-          <span class="step-title"><i class="el-icon-s-grid"></i> Step 4: 网格属性 (井/K)</span>
+          <span class="step-title"><i class="el-icon-menu"></i> Step 4: 网格属性 (井/K)</span>
         </template>
         <AttributeManager 
           :wells="wells" 
@@ -74,8 +73,8 @@
 </template>
 
 <script>
-// 引入原 App.vue 中右侧面板需要的组件
-import LayerPanel from './LayerPanel.vue';
+// 引入原有的组件，将 LayerPanel 换成 GridSettings
+import GridSettings from './GridSettings.vue';
 import AttributeManager from './AttributeManager.vue';
 import RchEvtManager from './RchEvtManager.vue';
 import BoundaryPanel from './BoundaryPanel.vue';
@@ -85,7 +84,7 @@ import AnalysisPanel from './AnalysisPanel.vue';
 export default {
   name: 'ModelParametersPanel',
   components: {
-    LayerPanel,
+    GridSettings, // 注册 GridSettings
     AttributeManager,
     RchEvtManager,
     BoundaryPanel,
@@ -93,7 +92,6 @@ export default {
     AnalysisPanel
   },
   props: {
-    // 接收来自 App.vue 的数据
     activeStep: { type: String, default: '3' },
     gridConfig: { type: Object, required: true },
     wells: { type: Array, default: () => [] },
@@ -108,7 +106,6 @@ export default {
 </script>
 
 <style scoped>
-/* 将原 App.vue 中相关的样式移过来 */
 .scrollable-card { display: flex; flex-direction: column; height: 100%; max-height: 100%; overflow: hidden; }
 .scrollable-card .el-card__header { flex-shrink: 0; background: #fcfcfc; padding: 12px 15px; }
 .scrollable-card .el-card__body { flex-grow: 1; overflow-y: auto; padding: 0 !important; }

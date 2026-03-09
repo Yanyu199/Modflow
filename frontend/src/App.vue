@@ -35,8 +35,8 @@
 
       <div class="layer-left">
         <el-card class="floating-card left-card-scroll" shadow="always" :body-style="{padding: '0px'}">
-          <div slot="header" class="clearfix">
-            <span><i class="el-icon-map-location"></i> 几何构建 (Step 1-2)</span>
+          <div class="step-header">
+            <span><i class="el-icon-map-location"></i> Step 1: 几何构建</span>
           </div>
           
           <BoundaryMap 
@@ -50,17 +50,20 @@
           />
           
           <div class="step-divider">
-             Step 2: 网格离散化设置
+             <i class="el-icon-files"></i> Step 2: 地层结构
           </div>
           
-          <GridSettings v-model="gridConfig" @preview="onPreviewGrid" />
+          <LayerPanel 
+            @model-ready="onModelReady" 
+            @preview-boreholes="onPreviewBoreholes"
+          />
         </el-card>
       </div>
 
       <div class="layer-right">
         <ModelParametersPanel
           :activeStep.sync="activeStep"
-          :gridConfig="gridConfig"
+          :gridConfig.sync="gridConfig" 
           :wells="wells"
           :kCells="kCells"
           :currentSegmentIdx="currentSegmentIdx"
@@ -68,6 +71,7 @@
           :loading="loading"
           :resultPoints="resultPoints"
           :currentLogs="currentLogs"
+          @preview-grid="onPreviewGrid"
           @layer-changed="onLayerUpdate"
           @delete-attribute="handleAttributeDelete"
           @type-change="handleAttributeTypeChange"
@@ -76,8 +80,6 @@
           @save-boundary="onBoundaryConfigSave"
           @remove-boundary="onBoundaryConfigRemove"
           @run="handleRun"
-          @model-ready="onModelReady" 
-          @preview-boreholes="onPreviewBoreholes"
         />
       </div>
     </div>
@@ -114,19 +116,18 @@
 
 <script>
 import BoundaryMap from './components/BoundaryMap.vue';
-import GridSettings from './components/GridSettings.vue';
 import Result3DViewer from './components/Real3DViewer.vue';
 import ModelParametersPanel from './components/ModelParametersPanel.vue';
-
+import LayerPanel from './components/LayerPanel.vue'; 
 import axios from 'axios';
 
 export default {
   name: 'App',
   components: { 
     BoundaryMap, 
-    GridSettings, 
     Result3DViewer, 
-    ModelParametersPanel 
+    ModelParametersPanel,
+    LayerPanel 
   },
   data() {
     return {
@@ -148,17 +149,14 @@ export default {
     };
   },
   methods: {
-    // === 0. 新增：处理钻孔模型就绪事件 ===
     onModelReady(data) {
-      // 自动将 Z 方向的层数设置为钻孔数据的最大分层 ID
-if (data.layers_count) this.gridConfig.n_layers = data.layers_count;
+      if (data.layers_count) this.gridConfig.n_layers = data.layers_count;
       if (data.layer_mapping) this.layerMapping = data.layer_mapping;
-      // ⭐ 注意：这里彻底删除了自动调用的 this.fetchGridPreview()
-      this.$message.success(`钻孔解析成功！请点击“预览钻孔”按钮查看三维空间分布。`);
+      this.$message.success(`钻孔解析成功！请点击“预览钻孔”查看。`);
     },
 
     onPreviewBoreholes(data) {
-      this.resultPoints = []; // 清空可能存在的旧网格数据，保证视图里只有钻孔
+      this.resultPoints = []; 
       this.$nextTick(() => {
         if (this.$refs.viewer3d && data.boreholes) {
           this.$refs.viewer3d.drawBoreholes(data.boreholes);
@@ -166,9 +164,8 @@ if (data.layers_count) this.gridConfig.n_layers = data.layers_count;
         }
       });
     },
-    // === 1. 项目保存与加载逻辑 ===
+
     saveProject() {
-      // ... (保持原样)
       const projectData = {
         boundary: this.boundary,
         gridConfig: this.gridConfig,
@@ -192,7 +189,6 @@ if (data.layers_count) this.gridConfig.n_layers = data.layers_count;
     },
 
     loadProject(file) {
-      // ... (保持原样)
       if (!file || !file.raw) return;
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -228,22 +224,21 @@ if (data.layers_count) this.gridConfig.n_layers = data.layers_count;
       reader.readAsText(file.raw);
     },
 
-    // === 2. 左侧几何与网格逻辑 ===
     onBoundaryLoaded(data) { 
         this.boundary = data; 
         this.wells = []; this.kCells = []; this.resultPoints = [];
         this.$message.success("边界加载成功，请继续 Step 2");
     },
     
+    // 修复点 2：在触发时，手动合并最新的 config 以防数据丢失
     onPreviewGrid(payload) { 
+      this.gridConfig = { ...this.gridConfig, ...payload.config };
       if(this.$refs.mapRef) this.$refs.mapRef.previewGrid(payload.size); 
       this.fetchGridPreview();
     },
 
-    // ⭐ 修改：支持自动边界，发送 project_id，渲染钻孔
     async fetchGridPreview() {
-      // 去掉了对 this.boundary 的强制非空拦截，允许后端自动计算包围盒
-try {
+      try {
         const res = await axios.post('http://localhost:5000/preview-geometry', {
           project_id: 'default',
           boundary: this.boundary,
@@ -253,10 +248,9 @@ try {
           this.resultPoints = res.data.points;
           
           if (res.data.layer_mapping) {
-            this.layerMapping = res.data.layer_mapping; // ⭐ 接收映射表
+            this.layerMapping = res.data.layer_mapping; 
           }
           
-          // 如果后端返回了自动生成的边界，且前端目前没边界，则赋值给前端并更新地图
           if (res.data.boundary_auto && (!this.boundary || this.boundary.length === 0)) {
             this.boundary = res.data.boundary_auto;
             if(this.$refs.mapRef) {
@@ -265,7 +259,6 @@ try {
             }
           }
           
-          // 如果后端返回了钻孔数据，交给 3D 视图渲染圆柱体
           this.$nextTick(() => {
             if (res.data.boreholes && this.$refs.viewer3d && this.$refs.viewer3d.drawBoreholes) {
               this.$refs.viewer3d.drawBoreholes(res.data.boreholes);
@@ -286,9 +279,7 @@ try {
       this.fetchGridPreview();
     },
 
-    // === 3. 交互逻辑 (左侧点击 -> 弹窗 -> 数据更新) ===
     onGridClicked(data) {
-      // ... (保持原样)
       const existingWell = this.wells.find(w => w.row === data.row && w.col === data.col);
       const existingK = this.kCells.find(k => k.row === data.row && k.col === data.col);
       this.tempCell = {
@@ -316,7 +307,6 @@ try {
       this.dialogVisible = false;
     },
 
-    // === 4. 右侧面板事件处理 ===
     onSegmentSelected(data) { 
         this.currentSegmentIdx = data.index; 
         this.activeStep = '5';
@@ -339,12 +329,10 @@ try {
       this.evtData = data.evt;
     },
 
-    // === 5. 核心运行逻辑与粒子追踪 ===
     onParticleTraceRequested(cell) {
       this.handleRun({ k: 10.0 }, cell);
     },
 
-    // ⭐ 修改：发送 project_id: 'default'
     async handleRun(partialParams, mpCell = null) {
       this.loading = true;
       this.currentLogs = '';
@@ -364,7 +352,7 @@ try {
       
       try {
         const res = await axios.post('http://localhost:5000/run-model', {
-          project_id: 'default', // ⭐ 加上默认项目ID
+          project_id: 'default', 
           boundary: this.boundary, 
           params: fullParams, 
           boundary_conditions: boundaryList, 
@@ -412,52 +400,52 @@ try {
 </script>
 
 <style>
-/* (这里完全保留你原本的 CSS，没有改动) */
 body { margin: 0; padding: 0; overflow: hidden; font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "微软雅黑", Arial, sans-serif; }
 
 .app-header { 
   position: absolute; top: 0; left: 0; width: 100%; height: 50px; 
-  background: linear-gradient(90deg, #303133, #545c64); 
-  color: white; line-height: 50px; padding-left: 20px; padding-right: 20px;
-  font-weight: bold; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.2); 
-  letter-spacing: 1px;
+  background: linear-gradient(90deg, #2b303b, #434a56); 
+  color: white; line-height: 50px; padding: 0 20px;
+  font-weight: 500; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.25); 
   display: flex; justify-content: space-between; align-items: center;
 }
 
 .header-tools { display: flex; align-items: center; }
-.header-btn { color: #fff !important; font-size: 14px; font-weight: normal; }
+.header-btn { color: #e4e7ed !important; font-size: 14px; margin-left: 10px; }
 .header-btn:hover { color: #409EFF !important; }
 
-.main-layout { position: relative; width: 100vw; height: 100vh; overflow: hidden; background: #f0f9ff; }
+.main-layout { position: relative; width: 100vw; height: 100vh; overflow: hidden; background: #eef2f5; }
 .layer-3d { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
 
 .layer-left { 
-  position: absolute; top: 60px; left: 20px; bottom: 20px; width: 420px; z-index: 10; 
+  position: absolute; top: 65px; left: 20px; bottom: 20px; width: 420px; z-index: 10; 
   display: flex; flex-direction: column; pointer-events: none; 
 }
-.left-card-scroll { display: flex; flex-direction: column; height: 100%; max-height: 100%; overflow: hidden; }
+.left-card-scroll { display: flex; flex-direction: column; height: 100%; overflow: hidden; border: none; }
 .left-card-scroll .el-card__body { flex-grow: 1; overflow-y: auto; padding: 0; }
 
+.step-header {
+  background: #f5f7fa; padding: 12px 15px; font-size: 14px; font-weight: bold; 
+  color: #303133; border-bottom: 1px solid #e4e7ed;
+}
+
 .step-divider {
-    background: #f5f7fa; 
-    padding: 10px; 
-    font-size: 13px; 
-    font-weight: bold; 
-    color: #606266;
-    border-top: 1px solid #ebeef5;
-    border-bottom: 1px solid #ebeef5;
+  background: #fdfdfd; padding: 12px 15px; font-size: 14px; font-weight: bold; 
+  color: #303133; border-top: 1px solid #ebeef5; border-bottom: 1px solid #ebeef5;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
 }
 
 .layer-right { 
-  position: absolute; top: 60px; right: 20px; bottom: 20px; width: 400px; z-index: 10; 
+  position: absolute; top: 65px; right: 20px; bottom: 20px; width: 400px; z-index: 10; 
   display: flex; flex-direction: column; pointer-events: none;
 }
 .layer-left .el-card, .layer-right .el-card { pointer-events: auto; }
 
 .floating-card { 
-  background: rgba(255, 255, 255, 0.98) !important; 
-  backdrop-filter: blur(10px); 
-  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.95) !important; 
+  backdrop-filter: blur(12px); 
+  border-radius: 8px; 
+  box-shadow: 0 8px 16px rgba(0,0,0,0.08) !important;
 }
 
 .center-tip { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 5; opacity: 0.9; }
