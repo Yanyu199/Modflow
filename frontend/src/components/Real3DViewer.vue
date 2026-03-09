@@ -405,13 +405,14 @@ drawBoreholes(boreholes) {
     },
 
     updateFlowVectors() {
-      this.clearArrows();
+this.clearArrows();
       if (!this.showFlow || !this.points || this.points.length === 0) {
         if(this.renderer) this.renderer.render(this.scene, this.camera);
         return;
       }
-      const arrowLen = this.currentCellSize * 0.8 * this.flowStep; 
-      const headLen = arrowLen * 0.3;
+      
+      const arrowLen = this.currentCellSize * 0.6; 
+      const headLen = arrowLen * 0.35;
       const headWidth = headLen * 0.5;
       const arrowColor = 0x00008B; 
       const step = this.flowStep; 
@@ -420,21 +421,55 @@ drawBoreholes(boreholes) {
         if (!p.flows) return;
         if (p.row % step !== 0 || p.col % step !== 0) return;
 
-        const vx = p.flows.right; const vy = p.flows.top * this.zScale; const vz = -p.flows.back;
-        const dir = new THREE.Vector3(vx, vy, vz);
-        if (dir.lengthSq() < 1e-12) return;
-        dir.normalize();
+        // ⭐ 核心修复：将 MODFLOW 的流量 (Q) 转换为真实的达西流速 (v = Q / A)
+        const qx = ( (p.flows.right || 0) - (p.flows.left || 0) ) / 2;
+        // 向北的总流量 = (北面流出量 - 南面流出量) / 2
+        const qy = ( (p.flows.back || 0) - (p.flows.front || 0) ) / 2;
+        // 向上的总流量 = (顶面流出量 - 底面流出量) / 2
+        const qz = ( (p.flows.top || 0) - (p.flows.bottom || 0) ) / 2;
+        const dx = this.currentCellSize; // X方向网格尺寸 (约1500m)
+        const dy = this.currentCellSize; // Y方向网格尺寸 (约1500m)
+        const dz = Math.max(0.1, p.top - p.bottom); // Z方向地层物理厚度 (约5m)
 
+        // 1. vx 是东西向水平流速，它的过水截面是侧面 (Y宽 * Z厚)
+        // const vx_real = (p.flows.right || 0) / (dy * dz);
+        
+        // // 2. vz 是南北向水平流速，过水截面同样是侧面 (X宽 * Z厚)
+        // // 注意：Three.js 的 -Z 轴对应真实世界的地理 Y 轴，所以加负号
+        // const vz_real = -(p.flows.back || 0) / (dx * dz);
+        
+        // // 3. vy 是垂直向(上下)流速，它的过水截面是顶底面 (X宽 * Y宽，这个面积极大！)
+        // // 除以巨大的面积后，垂直流速会被瞬间还原成极其微小的真实值
+        // const vy_real = (p.flows.top || 0) / (dx * dy);
+        const vx_real = qx / (dy * dz);
+        const vy_real = qz / (dx * dy);  // Z轴(高程)对应真实向上的流速
+        const vz_real = -qy / (dx * dz);
+        // 将物理流速映射到 3D 视觉空间。因为 Z轴 (高程) 被放大了 zScale 倍，
+        // 所以垂直流速在视觉上也需要等比例放大，否则爬坡/顺坡的水流看起来会是平的。
+        const vx = vx_real;
+        const vy = vy_real * this.zScale;
+        const vz = vz_real;
+        
+        const dir = new THREE.Vector3(vx, vy, vz);
+        
+        // 过滤掉极微弱的死水位 (标准提高到 1e-15)
+        if (dir.lengthSq() < 1e-15) return; 
+        
+        dir.normalize(); // 归一化，仅提取精确的流线方向
+
+        // 计算网格物理中心点，并将箭头后撤半个身位，使其完美锚定在网格正中心
         const centerZ = (p.top + p.bottom) / 2;
-        const origin = new THREE.Vector3(p.x - this.cx, centerZ * this.zScale, -(p.y - this.cy));
+        const cellCenter = new THREE.Vector3(p.x - this.cx, centerZ * this.zScale, -(p.y - this.cy));
+        const origin = cellCenter.clone().addScaledVector(dir, -arrowLen * 0.5);
 
         const arrow = new THREE.ArrowHelper(dir, origin, arrowLen, arrowColor, headLen, headWidth);
         arrow.userData = { layerIndex: p.layer };
+        
         this.scene.add(arrow);
         this.flowArrows.push(arrow);
       });
 
-      this.updateVisibility(); // 确保新画的箭头符合当前的隐藏状态
+      this.updateVisibility(); 
     },
 
 setupClickHandler() {

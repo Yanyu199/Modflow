@@ -51,12 +51,25 @@ def process_results(work_dir, nlay, nrow, ncol, idomain, top_arrays, bot_arrays,
                     vx, vy, vz = flow_map.get((k, i, j), (0.0, 0.0, 0.0))
                     thick = max(0.1, t_val - b_val)
                     points.append({
-                        "x": origin_x + j * delr + delr / 2, "y": origin_y + (nrow - 1 - i) * delc + delc / 2,
-                        "layer": k, "row": i, "col": j, "top": t_val, "bottom": b_val, "head": float(head[k, i, j]),
-                        "flows": {"vx": float(vx), "vy": float(vy), "vz": float(vz),
-                                  "right": vx * delc * thick, "left": -vx * delc * thick,
-                                  "front": -vy * delr * thick, "back": vy * delr * thick,
-                                  "bottom": vz * delr * delc, "top": -vz * delr * delc}
+                        "x": origin_x + j * delr + delr / 2,
+                        "y": origin_y + (nrow - 1 - i) * delc + delc / 2,
+                        "layer": k,
+                        "row": i,
+                        "col": j,
+                        "top": t_val,
+                        "bottom": b_val,
+                        "head": float(head[k, i, j]),
+
+                        # ⭐ 核心修改：修复六个面的净流出量方向映射
+                        "flows": {
+                            "vx": float(vx), "vy": float(vy), "vz": float(vz),
+                            "right": vx * delc * thick,  # 东面 (+X 方向，流出为正)
+                            "left": -vx * delc * thick,  # 西面 (-X 方向，流入为正，所以取反)
+                            "back": vy * delr * thick,  # 北面 (+Y 方向，流出为正)
+                            "front": -vy * delr * thick,  # 南面 (-Y 方向，取反)
+                            "top": vz * delr * delc,  # 顶面 (+Z 方向向上，流出为正。原代码此处写反了)
+                            "bottom": -vz * delr * delc  # 底面 (-Z 方向向下，取反)
+                        }
                     })
     return points
 

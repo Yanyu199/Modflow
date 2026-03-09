@@ -135,7 +135,7 @@ export default {
       resultPoints: [], 
       layerMapping: {},
       loading: false,
-      gridConfig: { x_mode: 'size', x_val: 50, y_mode: 'size', y_val: 50, n_layers: 1, z_thick: 10 },
+      gridConfig: { x_mode: 'size', x_val: 1000, y_mode: 'size', y_val: 1000, n_layers: 1, z_thick: 10 },
       currentSegmentIdx: null, 
       boundaryConfigs: {}, 
       wells: [], 
@@ -145,13 +145,32 @@ export default {
       rchData: [], 
       evtData: [],
       activeStep: '3',
-      currentLogs: ''
+      currentLogs: '',
+      rawCsvContent: null, // 新增：保存 CSV 纯文本
+      boreholesData: null  // 新增：保存用于 3D 渲染的钻孔柱子数据
     };
   },
   methods: {
+    getMapGridSize() {
+      // 如果没有边界数据，就返回默认值 50
+      if (!this.boundary || this.boundary.length === 0) return 50;
+      
+      if (this.gridConfig.x_mode === 'size') {
+        // 尺寸模式直接返回填写的尺寸
+        return this.gridConfig.x_val;
+      } else {
+        // 数量模式：计算出边界的真实宽度，除以数量，得到物理米数
+        const xs = this.boundary.map(p => p.x);
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
+        return (maxX - minX) / (this.gridConfig.x_val || 1);
+      }
+    },
     onModelReady(data) {
       if (data.layers_count) this.gridConfig.n_layers = data.layers_count;
       if (data.layer_mapping) this.layerMapping = data.layer_mapping;
+      this.rawCsvContent = data.rawCsv;
+      this.boreholesData = data.boreholes;
       this.$message.success(`钻孔解析成功！请点击“预览钻孔”查看。`);
     },
 
@@ -173,7 +192,10 @@ export default {
         wells: this.wells,
         kCells: this.kCells,
         rchData: this.rchData,
-        evtData: this.evtData
+        evtData: this.evtData,
+        layerMapping: this.layerMapping,
+        rawCsvContent: this.rawCsvContent,
+        boreholesData: this.boreholesData
       };
       
       const dataStr = JSON.stringify(projectData, null, 2);
@@ -188,10 +210,12 @@ export default {
       this.$message.success("项目已保存到本地");
     },
 
-    loadProject(file) {
+loadProject(file) {
       if (!file || !file.raw) return;
       const reader = new FileReader();
-      reader.onload = (e) => {
+      
+      // 注意这里加了 async，因为我们需要等待后端重建地质模型
+      reader.onload = async (e) => {
         try {
           const json = JSON.parse(e.target.result);
           if (json.boundary) this.boundary = json.boundary;
@@ -201,24 +225,48 @@ export default {
           if (json.kCells) this.kCells = json.kCells;
           if (json.rchData) this.rchData = json.rchData;
           if (json.evtData) this.evtData = json.evtData;
+          
+          // 恢复地层变量
+          if (json.layerMapping) this.layerMapping = json.layerMapping;
+          if (json.rawCsvContent) this.rawCsvContent = json.rawCsvContent;
+          if (json.boreholesData) this.boreholesData = json.boreholesData;
 
           this.resultPoints = [];
           this.currentLogs = '';
           this.activeStep = '3';
 
+          // 核心逻辑：如果 JSON 里有地质 CSV 数据，静默发给后端重建模型
+          if (this.rawCsvContent) {
+              this.$message.info("正在唤醒 3D 地质模型，请稍候...");
+              const blob = new Blob([this.rawCsvContent], { type: 'text/csv' });
+              const formData = new FormData();
+              formData.append('file', blob, 'recovered_boreholes.csv');
+              formData.append('project_id', 'default');
+              
+              // 强制等待后端解析完成
+              await axios.post('http://localhost:5000/upload-boreholes', formData);
+          }
+
           this.$message.success("项目加载成功！");
           
           this.$nextTick(() => {
+             // 恢复二维地图
              if (this.$refs.mapRef && this.boundary) {
+                 this.$refs.mapRef.boundary = this.boundary;
                  this.$refs.mapRef.drawMap();
-                 let sz = (this.gridConfig.x_mode === 'size') ? this.gridConfig.x_val : 50; 
-                 this.$refs.mapRef.previewGrid(sz);
+                 this.$refs.mapRef.previewGrid(this.getMapGridSize());
              }
+             // 恢复三维网格
              this.fetchGridPreview();
+             
+             // 恢复三维视图里的彩色钻孔柱子
+             if (this.boreholesData && this.$refs.viewer3d) {
+                 this.$refs.viewer3d.drawBoreholes(this.boreholesData);
+             }
           });
         } catch (err) {
           console.error(err);
-          this.$message.error("无法解析项目文件，格式错误");
+          this.$message.error("无法解析项目文件，或后端地质重建失败");
         }
       };
       reader.readAsText(file.raw);
@@ -233,7 +281,8 @@ export default {
     // 修复点 2：在触发时，手动合并最新的 config 以防数据丢失
     onPreviewGrid(payload) { 
       this.gridConfig = { ...this.gridConfig, ...payload.config };
-      if(this.$refs.mapRef) this.$refs.mapRef.previewGrid(payload.size); 
+      if(this.$refs.mapRef)
+      this.$refs.mapRef.previewGrid(this.getMapGridSize()); 
       this.fetchGridPreview();
     },
 
@@ -254,7 +303,7 @@ export default {
           if (res.data.boundary_auto && (!this.boundary || this.boundary.length === 0)) {
             this.boundary = res.data.boundary_auto;
             if(this.$refs.mapRef) {
-              Object.assign(this.$refs.mapRef, { localBoundary: this.boundary });
+              this.$refs.mapRef.boundary = this.boundary;
               this.$refs.mapRef.drawMap();
             }
           }

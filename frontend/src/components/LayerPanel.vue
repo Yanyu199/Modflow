@@ -78,29 +78,40 @@ const handleFileChange = (file) => {
 
 const uploadBoreholes = async () => {
   if (!selectedFile.value) return;
-  const formData = new FormData();
-  formData.append('file', selectedFile.value);
-  formData.append('project_id', 'default'); 
 
-  isUploading.value = true;
-  uploadResult.value = null;
-  errorMessage.value = '';
+  // 使用 FileReader 读取 CSV 文本内容，用于保存进项目 JSON 中
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const csvContent = e.target.result;
 
-  try {
-    const response = await axios.post(`${API_BASE_URL}/upload-boreholes`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    });
-    if (response.data.success) {
-      uploadResult.value = response.data;
-      emit('model-ready', response.data); 
-    } else {
-      errorMessage.value = '解析失败: ' + response.data.error;
+    const formData = new FormData();
+    formData.append('file', selectedFile.value);
+    formData.append('project_id', 'default'); 
+
+    isUploading.value = true;
+    uploadResult.value = null;
+    errorMessage.value = '';
+
+    try {
+      const response = await axios.post(`${API_BASE_URL}/upload-boreholes`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      if (response.data.success) {
+        uploadResult.value = response.data;
+        // 把后端的返回值和纯文本 csvContent 一起发给 App.vue
+        emit('model-ready', { ...response.data, rawCsv: csvContent }); 
+      } else {
+        errorMessage.value = '解析失败: ' + response.data.error;
+      }
+    } catch (error) {
+      errorMessage.value = error.response?.data?.error || '请求出错';
+    } finally {
+      isUploading.value = false;
     }
-  } catch (error) {
-    errorMessage.value = error.response?.data?.error || '请求出错';
-  } finally {
-    isUploading.value = false;
-  }
+  };
+  
+  // 触发读取文件
+  reader.readAsText(selectedFile.value);
 };
 </script>
 

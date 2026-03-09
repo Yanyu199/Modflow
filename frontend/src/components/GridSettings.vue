@@ -39,7 +39,7 @@ export default {
   props: { value: Object },
   data() {
     return {
-      config: { x_mode: 'size', x_val: 100, y_mode: 'size', y_val: 100, n_layers: 1, z_thick: 10 }
+      config: { x_mode: 'size', x_val: 1000, y_mode: 'size', y_val: 1000, n_layers: 1, z_thick: 10 }
     };
   },
   watch: {

@@ -142,3 +142,8 @@ h3 { margin: 0; font-size: 14px; color: #303133; }
 .empty-tip { font-size: 12px; color: #999; text-align: center; padding: 20px 0; }
 .clear-btn { color: #F56C6C; padding: 0; }
 </style>
+<style>
+.el-table .cell {
+width: 120px;
+}
+</style>
