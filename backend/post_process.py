@@ -3,11 +3,14 @@ import os
 import numpy as np
 import flopy
 
+
 def process_results(work_dir, nlay, nrow, ncol, idomain, top_arrays, bot_arrays, grid_info):
     hds_file = os.path.join(work_dir, "gwf.hds")
     bud_file = os.path.join(work_dir, "gwf.bud")
     head = flopy.utils.HeadFile(hds_file).get_data()
     bud = flopy.utils.CellBudgetFile(bud_file)
+
+    # 获取 MF6 专门输出的比流量数据 (Specific Discharge)
     spdis = []
     try:
         spdis = bud.get_data(text='DATA-SPDIS')[0]
@@ -39,17 +42,30 @@ def process_results(work_dir, nlay, nrow, ncol, idomain, top_arrays, bot_arrays,
                     real_i, real_j = rem // ncol, rem % ncol
                 if real_k >= 0:
                     flow_map[(int(real_k), int(real_i), int(real_j))] = (float(vx), float(vy), float(vz))
-            except: continue
+            except:
+                continue
 
-    origin_x, origin_y, delr, delc = grid_info['origin_x'], grid_info['origin_y'], grid_info['delr'], grid_info['delc']
+    origin_x, origin_y = grid_info['origin_x'], grid_info['origin_y']
+    delr, delc = grid_info['delr'], grid_info['delc']
     points = []
+
     for k in range(nlay):
         for i in range(nrow):
             for j in range(ncol):
                 if idomain[k, i, j] == 1:
-                    t_val, b_val = float(top_arrays[k][i, j]), float(bot_arrays[k][i, j])
-                    vx, vy, vz = flow_map.get((k, i, j), (0.0, 0.0, 0.0))
+                    t_val = float(top_arrays[k][i, j])
+                    b_val = float(bot_arrays[k][i, j])
                     thick = max(0.1, t_val - b_val)
+
+                    # 取出流速 (MF6标准：+qx为东，+qy为北，+qz为上)
+                    vx, vy, vz = flow_map.get((k, i, j), (0.0, 0.0, 0.0))
+
+                    # ⭐ 计算三个方向真实的物理过水截面积 (m²)
+                    area_x = delc * thick  # 东西向侧面面积
+                    area_y = delr * thick  # 南北向侧面面积
+                    area_z = delr * delc  # 顶底面面积
+
+                    # 组装 6 个面的通量，规则：正数代表水离开当前网格，负数代表水进入当前网格
                     points.append({
                         "x": origin_x + j * delr + delr / 2,
                         "y": origin_y + (nrow - 1 - i) * delc + delc / 2,
@@ -59,19 +75,18 @@ def process_results(work_dir, nlay, nrow, ncol, idomain, top_arrays, bot_arrays,
                         "top": t_val,
                         "bottom": b_val,
                         "head": float(head[k, i, j]),
-
-                        # ⭐ 核心修改：修复六个面的净流出量方向映射
                         "flows": {
                             "vx": float(vx), "vy": float(vy), "vz": float(vz),
-                            "right": vx * delc * thick,  # 东面 (+X 方向，流出为正)
-                            "left": -vx * delc * thick,  # 西面 (-X 方向，流入为正，所以取反)
-                            "back": vy * delr * thick,  # 北面 (+Y 方向，流出为正)
-                            "front": -vy * delr * thick,  # 南面 (-Y 方向，取反)
-                            "top": vz * delr * delc,  # 顶面 (+Z 方向向上，流出为正。原代码此处写反了)
-                            "bottom": -vz * delr * delc  # 底面 (-Z 方向向下，取反)
+                            "right": vx * area_x,  # 东面 (+X 方向，流出为正)
+                            "left": -vx * area_x,  # 西面 (-X 方向，流出为正)
+                            "back": vy * area_y,  # 北面 (+Y 方向，流出为正)
+                            "front": -vy * area_y,  # 南面 (-Y 方向，流出为正)
+                            "top": vz * area_z,  # 顶面 (+Z 方向，流出为正)
+                            "bottom": -vz * area_z  # 底面 (-Z 方向，流出为正)
                         }
                     })
     return points
+
 
 def process_pathlines(work_dir, grid_info):
     """解析 MODPATH 7 粒子路径文件"""
@@ -81,5 +96,7 @@ def process_pathlines(work_dir, grid_info):
         pobj = flopy.utils.PathlineFile(pth_file)
         origin_x, origin_y = grid_info['origin_x'], grid_info['origin_y']
         all_paths = pobj.get_alldata()
-        return [[{"x": float(s['x'] + origin_x), "y": float(s['y'] + origin_y), "z": float(s['z'])} for s in path] for path in all_paths]
-    except: return []
+        return [[{"x": float(s['x'] + origin_x), "y": float(s['y'] + origin_y), "z": float(s['z'])} for s in path] for
+                path in all_paths]
+    except:
+        return []
