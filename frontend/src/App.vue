@@ -29,6 +29,10 @@
           ref="viewer3d" 
           :points="resultPoints" 
           :layerMapping="layerMapping"
+          :rchData="rchData"
+          :evtData="evtData"
+          :showRchContour="showRchContour"
+          :showEvtContour="showEvtContour"
           @trace-particle="onParticleTraceRequested"
         />
       </div>
@@ -146,20 +150,20 @@ export default {
       evtData: [],
       activeStep: '3',
       currentLogs: '',
-      rawCsvContent: null, // 新增：保存 CSV 纯文本
-      boreholesData: null  // 新增：保存用于 3D 渲染的钻孔柱子数据
+      rawCsvContent: null,
+      boreholesData: null,
+      
+      // ⭐ 新增：源汇项等值线显示开关
+      showRchContour: false,
+      showEvtContour: false
     };
   },
   methods: {
     getMapGridSize() {
-      // 如果没有边界数据，就返回默认值 50
       if (!this.boundary || this.boundary.length === 0) return 50;
-      
       if (this.gridConfig.x_mode === 'size') {
-        // 尺寸模式直接返回填写的尺寸
         return this.gridConfig.x_val;
       } else {
-        // 数量模式：计算出边界的真实宽度，除以数量，得到物理米数
         const xs = this.boundary.map(p => p.x);
         const minX = Math.min(...xs);
         const maxX = Math.max(...xs);
@@ -210,11 +214,10 @@ export default {
       this.$message.success("项目已保存到本地");
     },
 
-loadProject(file) {
+    loadProject(file) {
       if (!file || !file.raw) return;
       const reader = new FileReader();
       
-      // 注意这里加了 async，因为我们需要等待后端重建地质模型
       reader.onload = async (e) => {
         try {
           const json = JSON.parse(e.target.result);
@@ -226,16 +229,17 @@ loadProject(file) {
           if (json.rchData) this.rchData = json.rchData;
           if (json.evtData) this.evtData = json.evtData;
           
-          // 恢复地层变量
           if (json.layerMapping) this.layerMapping = json.layerMapping;
           if (json.rawCsvContent) this.rawCsvContent = json.rawCsvContent;
           if (json.boreholesData) this.boreholesData = json.boreholesData;
 
+          // 重置视图与开关状态
           this.resultPoints = [];
           this.currentLogs = '';
           this.activeStep = '3';
+          this.showRchContour = false;
+          this.showEvtContour = false;
 
-          // 核心逻辑：如果 JSON 里有地质 CSV 数据，静默发给后端重建模型
           if (this.rawCsvContent) {
               this.$message.info("正在唤醒 3D 地质模型，请稍候...");
               const blob = new Blob([this.rawCsvContent], { type: 'text/csv' });
@@ -243,23 +247,19 @@ loadProject(file) {
               formData.append('file', blob, 'recovered_boreholes.csv');
               formData.append('project_id', 'default');
               
-              // 强制等待后端解析完成
               await axios.post('http://localhost:5000/upload-boreholes', formData);
           }
 
           this.$message.success("项目加载成功！");
           
           this.$nextTick(() => {
-             // 恢复二维地图
              if (this.$refs.mapRef && this.boundary) {
                  this.$refs.mapRef.boundary = this.boundary;
                  this.$refs.mapRef.drawMap();
                  this.$refs.mapRef.previewGrid(this.getMapGridSize());
              }
-             // 恢复三维网格
              this.fetchGridPreview();
              
-             // 恢复三维视图里的彩色钻孔柱子
              if (this.boreholesData && this.$refs.viewer3d) {
                  this.$refs.viewer3d.drawBoreholes(this.boreholesData);
              }
@@ -278,7 +278,6 @@ loadProject(file) {
         this.$message.success("边界加载成功，请继续 Step 2");
     },
     
-    // 修复点 2：在触发时，手动合并最新的 config 以防数据丢失
     onPreviewGrid(payload) { 
       this.gridConfig = { ...this.gridConfig, ...payload.config };
       if(this.$refs.mapRef)
@@ -373,9 +372,13 @@ loadProject(file) {
        if (newType === 'well') this.wells.push({ row, col, layer: layer||0, rate: -1000 });
        else this.kCells.push({ row, col, layer: layer||0, k_val: 10.0 });
     },
+
+    // ⭐ ⭐ ⭐ 关键修改在这里：同时接收并存储源汇项数据与它们的显示开关
     handleRchEvtUpdate(data) {
       this.rchData = data.rch;
       this.evtData = data.evt;
+      this.showRchContour = data.showRchContour || false;
+      this.showEvtContour = data.showEvtContour || false;
     },
 
     onParticleTraceRequested(cell) {

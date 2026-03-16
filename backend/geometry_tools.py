@@ -62,32 +62,35 @@ def generate_grid_info(params, boundary_coords):
         "grid_x": grid_x, "grid_y": grid_y,
         "polygon": polygon
     }
-def map_zones_to_grid(zones, nrow, ncol, active_2d, grid_centers):
+
+
+def map_scatter_to_grid(scatter_data, nrow, ncol, active_2d, grid_x, grid_y):
     """
-    将矢量分区 (RCH/EVT) 映射到网格数组
+    将气象站/钻孔等散点数据 (RCH/EVT) 插值映射到网格数组
     """
     array_out = np.zeros((nrow, ncol))
-    if not zones:
+    if not scatter_data:
         return array_out
 
-    for zone in zones:
-        try:
-            poly_pts = [(p['x'], p['y']) for p in zone['coords']]
-            if len(poly_pts) < 3: continue
-            poly = Polygon(poly_pts)
-            val = float(zone['value'])
+    # 逻辑1：如果只有 1 个点，全局均一赋值
+    if len(scatter_data) == 1:
+        val = float(scatter_data[0]['value'])
+        array_out = np.full((nrow, ncol), val)
 
-            # 简单的包含判断 (性能优化点：可先用 bounds 筛选)
-            minx, miny, maxx, maxy = poly.bounds
-            for i in range(nrow):
-                for j in range(ncol):
-                    if active_2d[i, j] == 1:
-                        pt = grid_centers[i][j]
-                        # 快速包围盒预判
-                        if pt.x < minx or pt.x > maxx or pt.y < miny or pt.y > maxy:
-                            continue
-                        if poly.contains(pt):
-                            array_out[i, j] = val
-        except:
-            continue
+    # 逻辑2：如果有多个点，进行空间插值
+    else:
+        pts = np.array([[pt['x'], pt['y']] for pt in scatter_data])
+        vals = np.array([pt['value'] for pt in scatter_data])
+
+        # 使用 nearest (最近邻) 插值法。
+        # 优点是能够很好地覆盖边界外推区域，且不会因为样条插值产生负数 (入渗率/蒸发率不能为负)。
+        array_out = griddata(pts, vals, (grid_x, grid_y), method='nearest')
+
+        # 兜底机制：万一极端情况下外推出现 NaN，使用全局平均值填充
+        if np.isnan(array_out).any():
+            array_out[np.isnan(array_out)] = np.nanmean(vals)
+
+    # 遮罩处理：非活动网格区域 (active_2d == 0) 必须强制清零，避免边界外出现异常源汇项
+    array_out[active_2d == 0] = 0.0
+
     return array_out

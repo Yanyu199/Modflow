@@ -10,14 +10,19 @@
         <div class="tab-content">
           <div class="upload-bar">
             <el-upload
-              action="http://localhost:5000/upload-zone"
+              action="http://localhost:5000/upload-scatter"
               :show-file-list="false"
               :on-success="onRchSuccess"
-              accept=".zip"
+              accept=".csv, .xlsx, .xls"
             >
-              <el-button size="mini" type="primary" icon="el-icon-upload">导入分区SHP</el-button>
+              <el-button size="mini" type="primary" icon="el-icon-upload">导入散点数据</el-button>
             </el-upload>
-            <span class="tip">SHP属性需含 'rate' 或 'val'</span>
+            <el-button size="mini" type="text" @click="downloadTemplate">下载模板</el-button>
+          </div>
+          
+          <div class="tip-bar">
+            <span class="tip"><i class="el-icon-info"></i> 提示：1个点为全局均匀赋值；多点将自动进行最近邻空间插值。</span>
+            <el-switch v-model="showRchContour" active-text="3D等值线显示" size="mini"></el-switch>
           </div>
 
           <el-table 
@@ -28,8 +33,10 @@
             size="mini" 
             style="width: 100%; margin-top: 5px;"
           >
-            <el-table-column prop="id" label="ID" width="50"></el-table-column>
-            <el-table-column label="入渗率 (m/d)">
+            <el-table-column type="index" label="ID" width="50" align="center"></el-table-column>
+            <el-table-column prop="x" label="X坐标" :formatter="formatCoord"></el-table-column>
+            <el-table-column prop="y" label="Y坐标" :formatter="formatCoord"></el-table-column>
+            <el-table-column label="入渗率 (m/d)" width="120">
               <template slot-scope="scope">
                 <el-input-number 
                   v-model="scope.row.value" 
@@ -41,13 +48,8 @@
                 </el-input-number>
               </template>
             </el-table-column>
-            <el-table-column label="查看" width="50" align="center">
-              <template slot-scope="scope">
-                <el-button type="text" icon="el-icon-view" @click="previewZone(scope.row, '入渗分区')"></el-button>
-              </template>
-            </el-table-column>
           </el-table>
-          <div v-else class="empty-text">暂无数据</div>
+          <div v-else class="empty-text">暂无数据，请导入包含 X, Y, Value 的表格</div>
         </div>
       </el-tab-pane>
 
@@ -55,14 +57,19 @@
         <div class="tab-content">
           <div class="upload-bar">
             <el-upload
-              action="http://localhost:5000/upload-zone"
+              action="http://localhost:5000/upload-scatter"
               :show-file-list="false"
               :on-success="onEvtSuccess"
-              accept=".zip"
+              accept=".csv, .xlsx, .xls"
             >
-              <el-button size="mini" type="warning" icon="el-icon-upload">导入分区SHP</el-button>
+              <el-button size="mini" type="warning" icon="el-icon-upload">导入散点数据</el-button>
             </el-upload>
-            <span class="tip">SHP属性需含 'rate' 或 'val'</span>
+            <el-button size="mini" type="text" @click="downloadTemplate">下载模板</el-button>
+          </div>
+
+          <div class="tip-bar">
+            <span class="tip"><i class="el-icon-info"></i> 提示：1个点为全局均匀赋值；多点将自动进行最近邻空间插值。</span>
+            <el-switch v-model="showEvtContour" active-text="3D等值线显示" size="mini"></el-switch>
           </div>
 
           <el-table 
@@ -73,8 +80,10 @@
             size="mini" 
             style="width: 100%; margin-top: 5px;"
           >
-            <el-table-column prop="id" label="ID" width="50"></el-table-column>
-            <el-table-column label="蒸发率 (m/d)">
+            <el-table-column type="index" label="ID" width="50" align="center"></el-table-column>
+            <el-table-column prop="x" label="X坐标" :formatter="formatCoord"></el-table-column>
+            <el-table-column prop="y" label="Y坐标" :formatter="formatCoord"></el-table-column>
+            <el-table-column label="蒸发率 (m/d)" width="120">
               <template slot-scope="scope">
                 <el-input-number 
                   v-model="scope.row.value" 
@@ -86,28 +95,12 @@
                 </el-input-number>
               </template>
             </el-table-column>
-            <el-table-column label="查看" width="50" align="center">
-              <template slot-scope="scope">
-                <el-button type="text" icon="el-icon-view" @click="previewZone(scope.row, '蒸发分区')"></el-button>
-              </template>
-            </el-table-column>
           </el-table>
-          <div v-else class="empty-text">暂无数据</div>
+          <div v-else class="empty-text">暂无数据，请导入包含 X, Y, Value 的表格</div>
         </div>
       </el-tab-pane>
 
     </el-tabs>
-
-    <el-dialog :title="dialogTitle" :visible.sync="dialogVisible" width="300px" append-to-body>
-      <div v-if="currentZone" class="zone-info">
-        <p><strong>分区 ID:</strong> {{ currentZone.id }}</p>
-        <p><strong>顶点数量:</strong> {{ currentZone.coords.length }}</p>
-        <p><strong>当前设定值:</strong> {{ currentZone.value }} m/d</p>
-        <div class="info-note">
-          <i class="el-icon-info"></i> 系统将在运行时自动匹配该多边形覆盖的网格，并应用上述数值。
-        </div>
-      </div>
-    </el-dialog>
   </div>
 </template>
 
@@ -119,42 +112,53 @@ export default {
       activeTab: 'rch',
       rchList: [],
       evtList: [],
-      dialogVisible: false,
-      currentZone: null,
-      dialogTitle: ''
+      showRchContour: false,
+      showEvtContour: false
     };
   },
   watch: {
-    // 数据变动时通知父组件
     rchList: { deep: true, handler() { this.emitData(); } },
-    evtList: { deep: true, handler() { this.emitData(); } }
+    evtList: { deep: true, handler() { this.emitData(); } },
+    showRchContour() { this.emitData(); },
+    showEvtContour() { this.emitData(); }
   },
   methods: {
     onRchSuccess(res) {
       if (res.success) {
-        this.rchList = res.zones;
-        this.$message.success(`入渗分区导入成功: ${res.zones.length} 个`);
+        this.rchList = res.data;
+        this.$message.success(`入渗数据导入成功: 解析到 ${res.data.length} 个监测点`);
       } else {
-        this.$message.error('导入失败');
+        this.$message.error('导入失败: ' + res.error);
       }
     },
     onEvtSuccess(res) {
       if (res.success) {
-        this.evtList = res.zones;
-        this.$message.success(`蒸发分区导入成功: ${res.zones.length} 个`);
+        this.evtList = res.data;
+        this.$message.success(`蒸发数据导入成功: 解析到 ${res.data.length} 个监测点`);
       } else {
-        this.$message.error('导入失败');
+        this.$message.error('导入失败: ' + res.error);
       }
     },
-    previewZone(zone, title) {
-      this.currentZone = zone;
-      this.dialogTitle = title;
-      this.dialogVisible = true;
+    formatCoord(row, column, cellValue) {
+      return Number(cellValue).toFixed(2);
+    },
+    downloadTemplate() {
+      const csvContent = "data:text/csv;charset=utf-8,X,Y,Value\n500000,4500000,0.005\n500100,4500100,0.006";
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", "scatter_template.csv");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     },
     emitData() {
+      // 向上层抛出数据与渲染开关
       this.$emit('update', {
         rch: this.rchList,
-        evt: this.evtList
+        evt: this.evtList,
+        showRchContour: this.showRchContour,
+        showEvtContour: this.showEvtContour
       });
     }
   }
@@ -175,8 +179,10 @@ export default {
 .upload-bar {
   display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;
 }
-.tip { font-size: 10px; color: #999; }
+.tip-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  background: #f0f9eb; padding: 5px 8px; border-radius: 4px; margin-bottom: 5px;
+}
+.tip { font-size: 11px; color: #67C23A; }
 .empty-text { text-align: center; color: #ccc; font-size: 12px; padding: 20px; }
-.zone-info p { margin: 5px 0; font-size: 13px; }
-.info-note { background: #f0f9eb; color: #67C23A; padding: 8px; font-size: 12px; margin-top: 10px; border-radius: 4px; line-height: 1.4; }
 </style>

@@ -3,7 +3,7 @@
     <span class="control-label">Z轴: {{ localZScale }}x</span>
     <el-slider 
       v-model="localZScale" 
-      :min="1" :max="50" :step="1"
+      :min="1" :max="400" :step="1"
       @input="$emit('update:zScale', localZScale); $emit('z-change')" 
       style="width: 100px; display: inline-block; vertical-align: middle; margin: 0 10px;">
     </el-slider>

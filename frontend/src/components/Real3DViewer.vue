@@ -28,14 +28,16 @@
       <ViewerControls v-if="initialized" :camera="camera" :controls="controls" />
     </div>
 
-    <div 
-      v-if="selectedBorehole" 
-      class="borehole-tooltip" 
-      :style="popupStyle"
-    >
+    <div v-if="selectedBorehole" class="info-tooltip" :style="popupStyle">
       <div class="tooltip-title"><i class="el-icon-location"></i> 钻孔信息</div>
       <div><strong>名称:</strong> <span style="color: #409EFF">{{ selectedBorehole.name }}</span></div>
-      <div style="font-size: 12px; color: #666; margin-top: 4px;">当前点击分层 ID: {{ selectedBorehole.layerId }}</div>
+      <div style="font-size: 12px; color: #666; margin-top: 4px;">分层 ID: {{ selectedBorehole.layerId }}</div>
+    </div>
+
+    <div v-if="selectedSurfaceData" class="info-tooltip" :style="surfacePopupStyle">
+      <div class="tooltip-title"><i class="el-icon-cloudy-and-sunny"></i> 源汇项信息</div>
+      <div><strong>类型:</strong> {{ selectedSurfaceData.type }}</div>
+      <div><strong>数值:</strong> <span style="color: #F56C6C; font-weight:bold;">{{ selectedSurfaceData.val.toFixed(6) }}</span> m/d</div>
     </div>
 
     <CellDetailPanel 
@@ -49,7 +51,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-// 引入所有 UI 子组件
 import ViewerTopBar from './ViewerTopBar.vue';
 import LayerVisibilityPanel from './LayerVisibilityPanel.vue';
 import ViewerControls from './ViewerControls.vue';
@@ -72,37 +73,34 @@ export default {
   },
   props: { 
     points: { type: Array, default: () => [] },
-    layerMapping: { type: Object, default: () => ({}) } 
+    layerMapping: { type: Object, default: () => ({}) },
+    // 新增接收父组件传来的散点数据和开关
+    rchData: { type: Array, default: () => [] },
+    evtData: { type: Array, default: () => [] },
+    showRchContour: { type: Boolean, default: false },
+    showEvtContour: { type: Boolean, default: false }
   },
   data() {
     return {
-      // --- Three.js 核心对象 ---
       scene: null, camera: null, renderer: null, controls: null,
       meshes: [], boreholeGroup: null, flowArrows: [], pathLines: [],
-      
-      // --- 渲染状态数据 ---
-      layerVisibility: [], 
-      maxLayer: 0,
+      layerVisibility: [], maxLayer: 0,
       initialized: false, animationId: null, clickHandler: null,
       currentBoreholes: [], cellDataMap: {},
       cx: 0, cy: 0, currentCellSize: 50,
       
-      // --- 用户交互配置 (与子组件双向绑定) ---
-      zScale: 5, 
-      opacity: 0.6, 
-      showFlow: false, 
-      flowStep: 3, 
-      showLegend: true,
-
-      // --- 数据结果极值 ---
+      zScale: 5, opacity: 0.6, showFlow: false, flowStep: 3, showLegend: true,
       minHead: null, maxHead: null,
 
-      // --- 射线交互所需 ---
       raycaster: new THREE.Raycaster(),
       mouse: new THREE.Vector2(),
       selectedCell: null,
       selectedBorehole: null,
-      popupStyle: { top: '0px', left: '0px' }
+      popupStyle: { top: '0px', left: '0px' },
+      
+      // 新增：用于显示源汇项浮窗
+      selectedSurfaceData: null,
+      surfacePopupStyle: { top: '0px', left: '0px' }
     };
   },
   watch: {
@@ -112,9 +110,15 @@ export default {
         this.drawVoxels(newPoints);
         this.selectedCell = null;
         this.selectedBorehole = null;
+        this.selectedSurfaceData = null;
       },
       deep: true
-    }
+    },
+    // 监听源汇项开关和数据的变化
+    showRchContour() { this.updateSurfaceColors(); },
+    showEvtContour() { this.updateSurfaceColors(); },
+    rchData: { deep: true, handler() { if(this.showRchContour) this.updateSurfaceColors(); } },
+    evtData: { deep: true, handler() { if(this.showEvtContour) this.updateSurfaceColors(); } }
   },
   mounted() {
     this.$nextTick(() => {
@@ -158,10 +162,6 @@ export default {
        });
        if (this.renderer) this.renderer.render(this.scene, this.camera);
     },
-
-    // -----------------------------------------------------------------
-    // ⬇️ 以下均为原封不动的 Three.js 核心绘图算法 (未作修改，仅折叠呈现) ⬇️
-    // -----------------------------------------------------------------
 
     initThree() {
       const container = this.$refs.container;
@@ -293,9 +293,87 @@ export default {
       
       this.updateFlowVectors();
       this.updateVisibility();
+      
+      // 绘图结束后，如果是处于源汇项视图，立即刷新等值线颜色
+      if (this.showRchContour || this.showEvtContour) {
+        this.updateSurfaceColors();
+      }
     },
 
-drawBoreholes(boreholes) {
+    // 🌟 新增核心功能：在表层 (Layer 0) 进行空间插值与渲染
+    updateSurfaceColors() {
+      if (!this.scene) return;
+      // 仅作用于顶层网格
+      const layer0Mesh = this.meshes.find(m => m.userData.layerIndex === 0);
+      if (!layer0Mesh) return;
+
+      const color = new THREE.Color();
+
+      // 如果两个开关都关闭，恢复原始网格水头颜色或默认颜色
+      if (!this.showRchContour && !this.showEvtContour) {
+         const hs = this.points.filter(p => p.head !== null && p.head !== undefined).map(p => p.head);
+         const minH = hs.length > 0 ? Math.min(...hs) : null;
+         const maxH = hs.length > 0 ? Math.max(...hs) : null;
+
+         this.points.filter(p => p.layer === 0).forEach((p, i) => {
+            if (p.head !== null && p.head !== undefined && hs.length > 0) {
+               let t = 0.5;
+               if (maxH !== minH) t = (p.head - minH) / (maxH - minH);
+               color.setHSL(0.66 * t, 0.8, 0.5);
+            } else {
+               color.setHex(LAYER_COLORS[0]);
+            }
+            layer0Mesh.setColorAt(i, color);
+         });
+         layer0Mesh.instanceColor.needsUpdate = true;
+         if (this.renderer) this.renderer.render(this.scene, this.camera);
+         return;
+      }
+
+      // 获取当前激活的数据源
+      const activeData = this.showRchContour ? this.rchData : this.evtData;
+      if (!activeData || activeData.length === 0) return;
+
+      // 计算极值，用于构建热力图渐变
+      let minV = Infinity, maxV = -Infinity;
+      activeData.forEach(d => {
+         if(d.value < minV) minV = d.value;
+         if(d.value > maxV) maxV = d.value;
+      });
+
+      this.points.filter(p => p.layer === 0).forEach((p, i) => {
+         // 1. 最近邻插值 (Nearest Neighbor) 计算该网格的值
+         let nearestVal = activeData[0].value;
+         if (activeData.length > 1) {
+            let minDist = Infinity;
+            activeData.forEach(d => {
+               let dist = Math.pow(p.x - d.x, 2) + Math.pow(p.y - d.y, 2);
+               if (dist < minDist) { minDist = dist; nearestVal = d.value; }
+            });
+         }
+
+         // 2. 将计算结果挂载到 cellDataMap，供点击事件读取
+         const cellObj = this.cellDataMap[`0_${i}`];
+         if (cellObj) {
+            if (this.showRchContour) cellObj.rch_value = nearestVal;
+            if (this.showEvtContour) cellObj.evt_value = nearestVal;
+         }
+
+         // 3. 热力图映射 (从蓝到红渐变)
+         let t = 0.5;
+         if (maxV !== minV) {
+             t = (nearestVal - minV) / (maxV - minV);
+         }
+         // HSL 色相: 0.66 (蓝) 到 0.0 (红)
+         color.setHSL((1 - t) * 0.66, 0.8, 0.5);
+         layer0Mesh.setColorAt(i, color);
+      });
+
+      layer0Mesh.instanceColor.needsUpdate = true;
+      if (this.renderer) this.renderer.render(this.scene, this.camera);
+    },
+
+    drawBoreholes(boreholes) {
       if (!this.scene) return;
       this.currentBoreholes = boreholes;
 
@@ -330,10 +408,9 @@ drawBoreholes(boreholes) {
       const radius = (this.currentCellSize || 50) * 0.15; 
       const radialSegments = 32; 
       
-      // ⭐ 核心优化：只创建一个纯粹的水平“圆环边框”，抛弃会画竖线的 EdgesGeometry
       const circleGeo = new THREE.CircleGeometry(radius, radialSegments);
       const edgeGeo = new THREE.EdgesGeometry(circleGeo);
-      edgeGeo.rotateX(Math.PI / 2); // 将圆环放平 (平行于 XZ 面)
+      edgeGeo.rotateX(Math.PI / 2); 
       const lineMat = new THREE.LineBasicMaterial({ color: 0x333333, linewidth: 1 });
 
       boreholes.forEach(bh => {
@@ -341,7 +418,6 @@ drawBoreholes(boreholes) {
           const height = layer.top - layer.bottom;
           if (height <= 0.01) return; 
 
-          // 依然保留 0.99 的高度收缩以防止相邻面的缝隙干扰
           const displayHeight = height * this.zScale * 0.99;
           const geo = new THREE.CylinderGeometry(radius, radius, displayHeight, radialSegments);
           
@@ -358,7 +434,6 @@ drawBoreholes(boreholes) {
           const mesh = new THREE.Mesh(geo, mat);
           mesh.userData = { type: 'borehole', name: bh.name, layer_id: layer.layer_id };
 
-          // ⭐ 仅把圆环添加到圆柱的顶部和底部
           const topRing = new THREE.LineSegments(edgeGeo, lineMat);
           topRing.position.y = displayHeight / 2;
           mesh.add(topRing);
@@ -405,7 +480,7 @@ drawBoreholes(boreholes) {
     },
 
     updateFlowVectors() {
-this.clearArrows();
+      this.clearArrows();
       if (!this.showFlow || !this.points || this.points.length === 0) {
         if(this.renderer) this.renderer.render(this.scene, this.camera);
         return;
@@ -421,43 +496,26 @@ this.clearArrows();
         if (!p.flows) return;
         if (p.row % step !== 0 || p.col % step !== 0) return;
 
-        // ⭐ 核心修复：将 MODFLOW 的流量 (Q) 转换为真实的达西流速 (v = Q / A)
         const qx = ( (p.flows.right || 0) - (p.flows.left || 0) ) / 2;
-        // 向北的总流量 = (北面流出量 - 南面流出量) / 2
         const qy = ( (p.flows.back || 0) - (p.flows.front || 0) ) / 2;
-        // 向上的总流量 = (顶面流出量 - 底面流出量) / 2
         const qz = ( (p.flows.top || 0) - (p.flows.bottom || 0) ) / 2;
-        const dx = this.currentCellSize; // X方向网格尺寸 (约1500m)
-        const dy = this.currentCellSize; // Y方向网格尺寸 (约1500m)
-        const dz = Math.max(0.1, p.top - p.bottom); // Z方向地层物理厚度 (约5m)
+        const dx = this.currentCellSize; 
+        const dy = this.currentCellSize; 
+        const dz = Math.max(0.1, p.top - p.bottom); 
 
-        // 1. vx 是东西向水平流速，它的过水截面是侧面 (Y宽 * Z厚)
-        // const vx_real = (p.flows.right || 0) / (dy * dz);
-        
-        // // 2. vz 是南北向水平流速，过水截面同样是侧面 (X宽 * Z厚)
-        // // 注意：Three.js 的 -Z 轴对应真实世界的地理 Y 轴，所以加负号
-        // const vz_real = -(p.flows.back || 0) / (dx * dz);
-        
-        // // 3. vy 是垂直向(上下)流速，它的过水截面是顶底面 (X宽 * Y宽，这个面积极大！)
-        // // 除以巨大的面积后，垂直流速会被瞬间还原成极其微小的真实值
-        // const vy_real = (p.flows.top || 0) / (dx * dy);
         const vx_real = qx / (dy * dz);
-        const vy_real = qz / (dx * dy);  // Z轴(高程)对应真实向上的流速
+        const vy_real = qz / (dx * dy);  
         const vz_real = -qy / (dx * dz);
-        // 将物理流速映射到 3D 视觉空间。因为 Z轴 (高程) 被放大了 zScale 倍，
-        // 所以垂直流速在视觉上也需要等比例放大，否则爬坡/顺坡的水流看起来会是平的。
+        
         const vx = vx_real;
         const vy = vy_real * this.zScale;
         const vz = vz_real;
         
         const dir = new THREE.Vector3(vx, vy, vz);
-        
-        // 过滤掉极微弱的死水位 (标准提高到 1e-15)
         if (dir.lengthSq() < 1e-15) return; 
         
-        dir.normalize(); // 归一化，仅提取精确的流线方向
+        dir.normalize(); 
 
-        // 计算网格物理中心点，并将箭头后撤半个身位，使其完美锚定在网格正中心
         const centerZ = (p.top + p.bottom) / 2;
         const cellCenter = new THREE.Vector3(p.x - this.cx, centerZ * this.zScale, -(p.y - this.cy));
         const origin = cellCenter.clone().addScaledVector(dir, -arrowLen * 0.5);
@@ -472,7 +530,7 @@ this.clearArrows();
       this.updateVisibility(); 
     },
 
-setupClickHandler() {
+    setupClickHandler() {
       const container = this.$refs.container;
       this.clickHandler = (event) => {
         const rect = container.getBoundingClientRect();
@@ -494,13 +552,10 @@ setupClickHandler() {
            const hit = intersects[0];
            
            let hitObj = hit.object;
-           // 如果点到了钻孔的黑色边线，向上找它的父级（圆柱体）
-           if (hitObj.type === 'LineSegments') {
-               hitObj = hitObj.parent;
-           }
+           if (hitObj.type === 'LineSegments') hitObj = hitObj.parent;
            
            if (hitObj.userData && hitObj.userData.type === 'borehole') {
-              // 1. 点击到了钻孔实体
+              // 点击到了钻孔
               const bhName = hitObj.userData.name;
               if (this.selectedBorehole && this.selectedBorehole.name === bhName && this.selectedBorehole.layerId === hitObj.userData.layer_id) {
                   this.selectedBorehole = null; 
@@ -509,19 +564,33 @@ setupClickHandler() {
                   this.popupStyle = { left: (event.clientX) + 'px', top: (event.clientY - 60) + 'px' };
               }
               this.selectedCell = null; 
+              this.selectedSurfaceData = null;
            } else {
-               // 2. ⭐ 点击到了网格 (恢复六向水量弹窗)
+               // ⭐ 点击到了网格
                const lIdx = hitObj.userData.layerIndex;
-               // 注意这里：恢复使用 hit.instanceId 获取网格索引
                const cellData = this.cellDataMap[`${lIdx}_${hit.instanceId}`];
+               
                if (cellData) { 
-                   this.selectedCell = cellData; 
+                   // 判断：如果是源汇项查看模式，且点中了表层 (Layer 0)
+                   if ((this.showRchContour || this.showEvtContour) && lIdx === 0) {
+                       this.selectedSurfaceData = {
+                           val: this.showRchContour ? cellData.rch_value : cellData.evt_value,
+                           type: this.showRchContour ? '入渗率' : '蒸发率'
+                       };
+                       this.surfacePopupStyle = { left: event.clientX + 'px', top: (event.clientY - 60) + 'px' };
+                       this.selectedCell = null; // 隐藏默认的大水量面板
+                   } else {
+                       // 正常模式，弹出六面水量框
+                       this.selectedCell = cellData; 
+                       this.selectedSurfaceData = null;
+                   }
                }
                this.selectedBorehole = null; 
            }
         } else {
            this.selectedCell = null;
            this.selectedBorehole = null;
+           this.selectedSurfaceData = null;
         }
       };
       container.addEventListener('click', this.clickHandler);
@@ -540,8 +609,8 @@ setupClickHandler() {
 .viewer-wrapper { width: 100%; height: 100%; position: relative; overflow: hidden; }
 .three-container { width: 100%; height: 100%; background: #f0f9ff; cursor: default; }
 
-/* 仅保留无法抽离的局部悬浮样式 */
-.borehole-tooltip {
+/* 悬浮信息框通用样式 (给钻孔和源汇项复用) */
+.info-tooltip {
   position: fixed; 
   background: rgba(255, 255, 255, 0.98);
   padding: 10px 15px;

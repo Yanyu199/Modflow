@@ -2,11 +2,11 @@
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 import os
-from geometry_utils import parse_shapefile_zip, parse_zone_shapefile  # 移除了 extract_xyz_from_zip
+import pandas as pd
+from geometry_utils import parse_shapefile_zip, parse_zone_shapefile
 from modflow_engine import run_simulation, get_grid_geometry
 from export_utils import generate_obj_string
-from geological_builder import GeologicalModeler  # 引入我们新建的地质建模器
-
+from geological_builder import GeologicalModeler
 app = Flask(__name__)
 CORS(app)
 
@@ -14,6 +14,47 @@ CORS(app)
 GEO_MODELS = {}
 
 
+@app.route('/upload-scatter', methods=['POST'])
+def upload_scatter():
+    try:
+        file = request.files['file']
+        filename = file.filename.lower()
+
+        # 支持 CSV 与 Excel
+        if filename.endswith('.csv'):
+            df = pd.read_csv(file)
+        elif filename.endswith(('.xls', '.xlsx')):
+            df = pd.read_excel(file)
+        else:
+            return jsonify({"success": False, "error": "不支持的文件格式，请上传 CSV 或 Excel"}), 400
+
+        # 智能匹配表头（将列名全部转小写进行匹配）
+        cols = [str(c).lower().strip() for c in df.columns]
+
+        x_col = next((c for c in cols if c in ['x', 'lon', '经度', 'x坐标']), None)
+        y_col = next((c for c in cols if c in ['y', 'lat', '纬度', 'y坐标']), None)
+        val_col = next((c for c in cols if c in ['value', 'val', 'rate', '入渗率', '蒸发率', '数值', 'v']), None)
+
+        if not (x_col and y_col and val_col):
+            return jsonify({"success": False,
+                            "error": f"缺少必需列，当前识别到的列有: {', '.join(df.columns)}。请确保包含 X, Y, Value 列"}), 400
+
+        # 提取目标列并剔除空值
+        df.columns = cols
+        df_clean = df[[x_col, y_col, val_col]].dropna()
+
+        # 转换为前端所需结构
+        result = []
+        for _, row in df_clean.iterrows():
+            result.append({
+                "x": float(row[x_col]),
+                "y": float(row[y_col]),
+                "value": float(row[val_col])
+            })
+
+        return jsonify({"success": True, "data": result})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 @app.route('/upload-boreholes', methods=['POST'])
 def upload_boreholes():
     try:

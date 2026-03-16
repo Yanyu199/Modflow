@@ -1,6 +1,6 @@
 # backend/modflow_engine.py
 import os, shutil, uuid, traceback, numpy as np
-from geometry_tools import generate_grid_info, map_zones_to_grid  # 移除了 compute_layer_elevations
+from geometry_tools import generate_grid_info, map_scatter_to_grid
 from mf6_wrapper import MF6Builder, BASE_DIR
 from post_process import process_results, process_pathlines
 
@@ -37,9 +37,10 @@ def run_simulation(params, boundary_coords, custom_boundaries=[], geo_model=None
         idomain = np.zeros((nlay, grid['nrow'], grid['ncol']), dtype=int)
         for k in range(nlay): idomain[k, :, :] = grid['active_2d']
 
-        rch_arr = map_zones_to_grid(rch_data, grid['nrow'], grid['ncol'], grid['active_2d'], grid['grid_centers'])
-        evt_arr = map_zones_to_grid(evt_data, grid['nrow'], grid['ncol'], grid['active_2d'], grid['grid_centers'])
-
+        rch_arr = map_scatter_to_grid(rch_data, grid['nrow'], grid['ncol'], grid['active_2d'], grid['grid_x'],
+                                      grid['grid_y'])
+        evt_arr = map_scatter_to_grid(evt_data, grid['nrow'], grid['ncol'], grid['active_2d'], grid['grid_x'],
+                                      grid['grid_y'])
         builder = MF6Builder(run_id, WORK_DIR)
         builder.initialize_sim()
 
