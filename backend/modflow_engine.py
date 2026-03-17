@@ -1,12 +1,12 @@
 # backend/modflow_engine.py
 import os, shutil, uuid, traceback, numpy as np
-from geometry_tools import generate_grid_info, map_scatter_to_grid
+from geometry_tools import generate_grid_info, map_zones_to_grid
 from mf6_wrapper import MF6Builder, BASE_DIR
 from post_process import process_results, process_pathlines
 
 
 def run_simulation(params, boundary_coords, custom_boundaries=[], geo_model=None, wells=[], k_cells=[], rch_data=[],
-                   evt_data=[], mp_start_cell=None):
+                   evt_data=[], mp_start_cell=None, faults=None): # 新增 faults 参数
     run_id = str(uuid.uuid4())[:8]
     WORK_DIR = os.path.join(BASE_DIR, "workspace", run_id)
     logs = []
@@ -18,9 +18,9 @@ def run_simulation(params, boundary_coords, custom_boundaries=[], geo_model=None
         if geo_model is None:
             return None, "❌ 未提供有效的钻孔地层模型数据"
 
-        logs.append("⏳ 正在进行三维地层插值与尖灭拓扑计算...")
-        # 传入计算好的 X, Y 网格坐标矩阵，获取插值后的高程字典
-        surfaces = geo_model.interpolate_surfaces(grid['grid_x'], grid['grid_y'])
+        logs.append("⏳ 正在进行三维地层插值与断层/尖灭拓扑计算...")
+        # 传入断层数据 faults
+        surfaces = geo_model.interpolate_surfaces(grid['grid_x'], grid['grid_y'], faults)
         nlay = len(geo_model.layers)
 
         top_arrays = []
@@ -37,10 +37,9 @@ def run_simulation(params, boundary_coords, custom_boundaries=[], geo_model=None
         idomain = np.zeros((nlay, grid['nrow'], grid['ncol']), dtype=int)
         for k in range(nlay): idomain[k, :, :] = grid['active_2d']
 
-        rch_arr = map_scatter_to_grid(rch_data, grid['nrow'], grid['ncol'], grid['active_2d'], grid['grid_x'],
-                                      grid['grid_y'])
-        evt_arr = map_scatter_to_grid(evt_data, grid['nrow'], grid['ncol'], grid['active_2d'], grid['grid_x'],
-                                      grid['grid_y'])
+        rch_arr = map_zones_to_grid(rch_data, grid['nrow'], grid['ncol'], grid['active_2d'], grid['grid_centers'])
+        evt_arr = map_zones_to_grid(evt_data, grid['nrow'], grid['ncol'], grid['active_2d'], grid['grid_centers'])
+
         builder = MF6Builder(run_id, WORK_DIR)
         builder.initialize_sim()
 
@@ -117,13 +116,14 @@ def run_simulation(params, boundary_coords, custom_boundaries=[], geo_model=None
         if os.path.exists(WORK_DIR): shutil.rmtree(WORK_DIR)
 
 
-def get_grid_geometry(params, boundary_coords, geo_model=None):
+def get_grid_geometry(params, boundary_coords, geo_model=None, faults=None): # 新增 faults 参数
     try:
         grid = generate_grid_info(params, boundary_coords)
         if geo_model is None:
             raise Exception("未提供地层模型数据")
 
-        surfaces = geo_model.interpolate_surfaces(grid['grid_x'], grid['grid_y'])
+        # 传入断层数据 faults
+        surfaces = geo_model.interpolate_surfaces(grid['grid_x'], grid['grid_y'], faults)
         nlay = len(geo_model.layers)
 
         points = []

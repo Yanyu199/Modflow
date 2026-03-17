@@ -8,7 +8,18 @@
         :before-upload="beforeUpload"
         accept=".zip"
       >
-        <el-button type="primary" icon="el-icon-upload" size="small">1. 上传边界 (Step 1)</el-button>
+        <el-button type="primary" icon="el-icon-upload" size="small">上传边界</el-button>
+      </el-upload>
+
+      <el-upload
+        action="http://localhost:5000/upload-faults"
+        :show-file-list="false"
+        :on-success="onFaultsUploadSuccess"
+        :before-upload="beforeFaultUpload"
+        accept=".csv,.xlsx,.xls"
+        style="margin-left: 10px;"
+      >
+        <el-button type="warning" icon="el-icon-data-line" size="small">上传断层</el-button>
       </el-upload>
 
       <el-radio-group v-model="mode" size="small" style="margin-left: auto;">
@@ -42,7 +53,8 @@ export default {
   props: {
     configuredData: Object,
     wells: Array,
-    kCells: Array
+    kCells: Array,
+    faults: Array // 新增：接收断层数据
   },
   data() {
     return {
@@ -60,7 +72,8 @@ export default {
     mode() { this.clickedCell = null; this.drawMap(); },
     configuredData: { deep: true, handler() { this.drawMap(); } },
     wells: { deep: true, handler() { this.drawMap(); } },
-    kCells: { deep: true, handler() { this.drawMap(); } }
+    kCells: { deep: true, handler() { this.drawMap(); } },
+    faults: { deep: true, handler() { this.drawMap(); } } // 监听断层数据变化重绘地图
   },
   mounted() {
     window.addEventListener('resize', this.onResize);
@@ -81,6 +94,19 @@ export default {
         this.gridLines = null; this.centerPoints = null; this.gridInfo = null; this.clickedCell = null;
         this.$emit('boundary-loaded', this.boundary);
         this.drawMap();
+      }
+    },
+    // 新增：断层文件上传前校验
+    beforeFaultUpload(file) { 
+      const ext = file.name.split('.').pop().toLowerCase();
+      return ['csv', 'xlsx', 'xls'].includes(ext);
+    },
+    // 新增：断层文件上传成功回调
+    onFaultsUploadSuccess(res) {
+      if (res.success) {
+        this.$emit('faults-loaded', res.faults);
+      } else {
+        this.$message.error(res.error || "断层解析失败");
       }
     },
     onMouseDown(e) {
@@ -168,7 +194,7 @@ export default {
       this.drawMap();
     },
     drawMap() {
-      if (!this.boundary || this.boundary.length === 0) return;
+      if ((!this.boundary || this.boundary.length === 0) && (!this.faults || this.faults.length === 0)) return;
       const traces = [];
 
       // 1. 网格
@@ -186,10 +212,28 @@ export default {
         });
       }
       // 3. 边界
-      const bx = this.boundary.map(p => p.x); const by = this.boundary.map(p => p.y);
-      traces.push({ x: bx, y: by, mode: 'lines', name: '边界', line: { color: '#333', width: 2 }, hoverinfo: 'none' });
+      if (this.boundary && this.boundary.length > 0) {
+        const bx = this.boundary.map(p => p.x); const by = this.boundary.map(p => p.y);
+        traces.push({ x: bx, y: by, mode: 'lines', name: '边界', line: { color: '#333', width: 2 }, hoverinfo: 'none' });
+      }
 
-      // 4. 属性渲染
+      // 新增：4. 渲染断层线
+      if (this.faults && this.faults.length > 0) {
+        this.faults.forEach((faultLine, idx) => {
+          const fx = faultLine.map(p => p.x);
+          const fy = faultLine.map(p => p.y);
+          traces.push({
+            x: fx, y: fy,
+            mode: 'lines+markers',
+            name: `断层 F${idx + 1}`,
+            line: { color: '#E02020', width: 3, dash: 'dot' },
+            marker: { size: 6, color: '#E02020' },
+            hoverinfo: 'name'
+          });
+        });
+      }
+
+      // 5. 属性渲染 (KCells & Wells)
       if (this.kCells && this.gridInfo) {
         const { minX, maxY, delr, delc } = this.gridInfo;
         this.kCells.forEach(cell => {
@@ -228,8 +272,8 @@ export default {
         });
       }
 
-      // 边界条件
-      if (this.configuredData) {
+      // 6. 边界条件渲染
+      if (this.configuredData && this.boundary && this.boundary.length > 0) {
         const typeColors = { 'CHD': '#F56C6C', 'RIV': '#409EFF', 'DRN': '#E6A23C', 'GHB': '#67C23A' };
         for (const segId in this.configuredData) {
           const cfg = this.configuredData[segId]; const idx = parseInt(segId);
@@ -296,6 +340,7 @@ export default {
              }
            }
        } else {
+           if (!this.boundary) return;
            let minDist = Infinity; let closestIdx = -1;
            const pts = this.boundary;
            for (let i = 0; i < pts.length - 1; i++) {
@@ -331,8 +376,6 @@ export default {
   position: relative; user-select: none; 
 }
 .header-actions { padding: 10px; border-bottom: 1px solid #eee; display: flex; align-items: center; }
-
-/* 调整后的高度：350px 适应悬浮窗口 */
 .canvas-scroll-box { 
   width: 100%; 
   height: 350px; 

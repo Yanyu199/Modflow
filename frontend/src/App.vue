@@ -29,10 +29,6 @@
           ref="viewer3d" 
           :points="resultPoints" 
           :layerMapping="layerMapping"
-          :rchData="rchData"
-          :evtData="evtData"
-          :showRchContour="showRchContour"
-          :showEvtContour="showEvtContour"
           @trace-particle="onParticleTraceRequested"
         />
       </div>
@@ -46,11 +42,13 @@
           <BoundaryMap 
             ref="mapRef" 
             @boundary-loaded="onBoundaryLoaded" 
+            @faults-loaded="onFaultsLoaded"
             @grid-clicked="onGridClicked" 
             @segment-selected="onSegmentSelected" 
             :configuredData="boundaryConfigs" 
             :wells="wells" 
-            :kCells="kCells" 
+            :kCells="kCells"
+            :faults="faults"
           />
           
           <div class="step-divider">
@@ -136,6 +134,7 @@ export default {
   data() {
     return {
       boundary: null, 
+      faults: [], // 新增：保存断层数据
       resultPoints: [], 
       layerMapping: {},
       loading: false,
@@ -151,11 +150,7 @@ export default {
       activeStep: '3',
       currentLogs: '',
       rawCsvContent: null,
-      boreholesData: null,
-      
-      // ⭐ 新增：源汇项等值线显示开关
-      showRchContour: false,
-      showEvtContour: false
+      boreholesData: null
     };
   },
   methods: {
@@ -191,6 +186,7 @@ export default {
     saveProject() {
       const projectData = {
         boundary: this.boundary,
+        faults: this.faults, // 保存时包含断层
         gridConfig: this.gridConfig,
         boundaryConfigs: this.boundaryConfigs,
         wells: this.wells,
@@ -222,6 +218,7 @@ export default {
         try {
           const json = JSON.parse(e.target.result);
           if (json.boundary) this.boundary = json.boundary;
+          if (json.faults) this.faults = json.faults; // 加载时恢复断层
           if (json.gridConfig) this.gridConfig = json.gridConfig;
           if (json.boundaryConfigs) this.boundaryConfigs = json.boundaryConfigs;
           if (json.wells) this.wells = json.wells;
@@ -233,12 +230,9 @@ export default {
           if (json.rawCsvContent) this.rawCsvContent = json.rawCsvContent;
           if (json.boreholesData) this.boreholesData = json.boreholesData;
 
-          // 重置视图与开关状态
           this.resultPoints = [];
           this.currentLogs = '';
           this.activeStep = '3';
-          this.showRchContour = false;
-          this.showEvtContour = false;
 
           if (this.rawCsvContent) {
               this.$message.info("正在唤醒 3D 地质模型，请稍候...");
@@ -275,7 +269,17 @@ export default {
     onBoundaryLoaded(data) { 
         this.boundary = data; 
         this.wells = []; this.kCells = []; this.resultPoints = [];
-        this.$message.success("边界加载成功，请继续 Step 2");
+        this.$message.success("边界加载成功");
+    },
+
+    // 新增：断层加载成功回调
+    onFaultsLoaded(data) {
+        this.faults = data;
+        this.$message.success(`成功载入 ${data.length} 条断层线`);
+        // 如果已经上传过钻孔并生成了网格，自动刷新3D网格预览
+        if (this.rawCsvContent) {
+            this.fetchGridPreview();
+        }
     },
     
     onPreviewGrid(payload) { 
@@ -290,7 +294,8 @@ export default {
         const res = await axios.post('http://localhost:5000/preview-geometry', {
           project_id: 'default',
           boundary: this.boundary,
-          params: this.gridConfig
+          params: this.gridConfig,
+          faults: this.faults // 携带断层数据传给后端进行切分插值
         });
         if (res.data.success) {
           this.resultPoints = res.data.points;
@@ -313,7 +318,7 @@ export default {
             }
           });
 
-          this.$message.success('3D 地质网格模型已刷新');
+          this.$message.success('3D 地质网格模型已刷新（包含断层特征）');
         } else {
           this.$message.warning(res.data.error || '获取网格失败');
         }
@@ -372,13 +377,9 @@ export default {
        if (newType === 'well') this.wells.push({ row, col, layer: layer||0, rate: -1000 });
        else this.kCells.push({ row, col, layer: layer||0, k_val: 10.0 });
     },
-
-    // ⭐ ⭐ ⭐ 关键修改在这里：同时接收并存储源汇项数据与它们的显示开关
     handleRchEvtUpdate(data) {
       this.rchData = data.rch;
       this.evtData = data.evt;
-      this.showRchContour = data.showRchContour || false;
-      this.showEvtContour = data.showEvtContour || false;
     },
 
     onParticleTraceRequested(cell) {
@@ -412,7 +413,8 @@ export default {
           k_cells: this.kCells,
           rch_data: this.rchData,
           evt_data: this.evtData,
-          mp_start_cell: mpCell 
+          mp_start_cell: mpCell,
+          faults: this.faults // 在引擎计算时包含断层
         });
         
         if (res.data.success) { 

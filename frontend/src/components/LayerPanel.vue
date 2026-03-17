@@ -7,7 +7,7 @@
         :auto-upload="false"
         :on-change="handleFileChange"
         :show-file-list="false"
-        accept=".csv"
+        accept=".csv,.xlsx,.xls"
         class="upload-component"
       >
         <el-button size="small" type="primary" plain icon="el-icon-folder-opened">导入钻孔 CSV</el-button>

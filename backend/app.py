@@ -2,11 +2,13 @@
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 import os
-import pandas as pd
+import traceback
+import pandas as pd  # 新增 pandas 用于读取断层 Excel/CSV
 from geometry_utils import parse_shapefile_zip, parse_zone_shapefile
 from modflow_engine import run_simulation, get_grid_geometry
 from export_utils import generate_obj_string
 from geological_builder import GeologicalModeler
+
 app = Flask(__name__)
 CORS(app)
 
@@ -14,59 +16,17 @@ CORS(app)
 GEO_MODELS = {}
 
 
-@app.route('/upload-scatter', methods=['POST'])
-def upload_scatter():
-    try:
-        file = request.files['file']
-        filename = file.filename.lower()
-
-        # 支持 CSV 与 Excel
-        if filename.endswith('.csv'):
-            df = pd.read_csv(file)
-        elif filename.endswith(('.xls', '.xlsx')):
-            df = pd.read_excel(file)
-        else:
-            return jsonify({"success": False, "error": "不支持的文件格式，请上传 CSV 或 Excel"}), 400
-
-        # 智能匹配表头（将列名全部转小写进行匹配）
-        cols = [str(c).lower().strip() for c in df.columns]
-
-        x_col = next((c for c in cols if c in ['x', 'lon', '经度', 'x坐标']), None)
-        y_col = next((c for c in cols if c in ['y', 'lat', '纬度', 'y坐标']), None)
-        val_col = next((c for c in cols if c in ['value', 'val', 'rate', '入渗率', '蒸发率', '数值', 'v']), None)
-
-        if not (x_col and y_col and val_col):
-            return jsonify({"success": False,
-                            "error": f"缺少必需列，当前识别到的列有: {', '.join(df.columns)}。请确保包含 X, Y, Value 列"}), 400
-
-        # 提取目标列并剔除空值
-        df.columns = cols
-        df_clean = df[[x_col, y_col, val_col]].dropna()
-
-        # 转换为前端所需结构
-        result = []
-        for _, row in df_clean.iterrows():
-            result.append({
-                "x": float(row[x_col]),
-                "y": float(row[y_col]),
-                "value": float(row[val_col])
-            })
-
-        return jsonify({"success": True, "data": result})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 @app.route('/upload-boreholes', methods=['POST'])
 def upload_boreholes():
     try:
         project_id = request.form.get('project_id', 'default')
         file = request.files['file']
 
-        geo_model = GeologicalModeler(file.stream)
+        geo_model = GeologicalModeler(file)
         geo_model.preprocess_data()
         GEO_MODELS[project_id] = geo_model
 
         frontend_data = geo_model.get_frontend_data()
-
         return jsonify({
             "success": True,
             "message": "钻孔数据解析成功",
@@ -77,6 +37,54 @@ def upload_boreholes():
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/upload-faults', methods=['POST'])
+def upload_faults():
+    try:
+        file = request.files['file']
+
+        # ⭐ 修改点 1：去掉 .stream，直接将 file 对象传给 pandas，兼容性更好
+        if file.filename.endswith('.csv'):
+            df = pd.read_csv(file)
+        elif file.filename.endswith('.xlsx') or file.filename.endswith('.xls'):
+            df = pd.read_excel(file)
+        else:
+            return jsonify({"success": False, "error": "请上传 .csv 或 .xlsx 格式文件"}), 400
+
+        # 智能匹配列名（容错处理：去除表头可能存在的首尾空格）
+        df.columns = df.columns.str.strip()
+
+        fault_id_col = '断层编号' if '断层编号' in df.columns else ('Fault_ID' if 'Fault_ID' in df.columns else None)
+        x_col = 'X' if 'X' in df.columns else None
+        y_col = 'Y' if 'Y' in df.columns else None
+
+        if not fault_id_col or not x_col or not y_col:
+            return jsonify({"success": False,
+                            "error": f"文件必须包含 '断层编号', 'X', 'Y' 列。当前识别到的列为: {list(df.columns)}"}), 400
+
+        faults_data = []
+        # 按断层编号分组，将每一组坐标按行顺序连接成一条断层线
+        for fault_id, group in df.groupby(fault_id_col):
+            line_coords = []
+            for _, row in group.iterrows():
+                line_coords.append({"x": float(row[x_col]), "y": float(row[y_col])})
+
+            # 断层线至少需要2个点
+            if len(line_coords) >= 2:
+                faults_data.append(line_coords)
+
+        return jsonify({
+            "success": True,
+            "message": f"成功解析 {len(faults_data)} 条断层线",
+            "faults": faults_data
+        })
+    except Exception as e:
+        # ⭐ 修改点 2：在终端强行打印出详细的错误追踪信息
+        print("\n================== 断层文件读取失败 ==================")
+        print(traceback.format_exc())
+        print("=====================================================\n")
+        return jsonify({"success": False, "error": "文件解析失败，请查看后端控制台日志"}), 500
 
 
 @app.route('/run-model', methods=['POST'])
@@ -92,6 +100,7 @@ def run():
         rch_data = data.get('rch_data', [])
         evt_data = data.get('evt_data', [])
         mp_start_cell = data.get('mp_start_cell')
+        faults = data.get('faults', [])  # 获取断层数据
 
         if not boundary:
             return jsonify({"error": "Invalid boundary"}), 400
@@ -106,12 +115,13 @@ def run():
             params=params,
             boundary_coords=boundary,
             custom_boundaries=custom_boundaries,
-            geo_model=geo_model,  # 将字典换成了模型对象
+            geo_model=geo_model,
             wells=wells,
             k_cells=k_cells,
             rch_data=rch_data,
             evt_data=evt_data,
-            mp_start_cell=mp_start_cell
+            mp_start_cell=mp_start_cell,
+            faults=faults  # 传递断层数据给引擎
         )
 
         if res_data is None:
@@ -136,6 +146,7 @@ def preview_geometry():
         project_id = data.get('project_id', 'default')
         boundary = data.get('boundary')
         params = data.get('params')
+        faults = data.get('faults', [])  # 获取断层数据
 
         geo_model = GEO_MODELS.get(project_id)
         if not geo_model:
@@ -153,14 +164,15 @@ def preview_geometry():
                 {"x": min(xs) - pad, "y": max(ys) + pad}
             ]
 
-        points = get_grid_geometry(params, boundary, geo_model)
+        # 传递断层数据
+        points = get_grid_geometry(params, boundary, geo_model, faults)
 
         return jsonify({
             "success": True,
             "points": points,
             "boundary_auto": boundary,  # 返回自动生成的边界
             "boreholes": geo_model.get_frontend_data()['boreholes'],
-            "layer_mapping": geo_model.get_frontend_data()['layer_mapping']# 带上钻孔以便3D渲染
+            "layer_mapping": geo_model.get_frontend_data()['layer_mapping']  # 带上钻孔以便3D渲染
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
