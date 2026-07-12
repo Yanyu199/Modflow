@@ -2,7 +2,10 @@
 import pandas as pd
 import numpy as np
 from scipy.interpolate import Rbf, griddata
-import pyvista as pv
+try:
+    import pyvista as pv
+except ImportError:  # pyvista is optional for the current API and test paths.
+    pv = None
 from shapely.geometry import Point, LineString, box
 from shapely.ops import split
 

@@ -13,8 +13,8 @@
 
 | 工作流能力 | GMS-like 第一阶段期望 | 当前状态 | 分类 | 第一阶段完成条件 |
 |---|---|---|---|---|
-| 项目创建与保存 | 项目包含边界、坐标系、单位、网格、地层、packages、运行记录 | 前端 JSON 保存部分状态，后端模型靠重新上传 CSV 恢复 | 部分实现 | 定义项目 schema/version；保存/打开后可无损复现同一 MF6 输入文件 |
-| CRS 和单位 | 明确 CRS、长度单位、时间单位、流量单位 | DIS 写入 METERS，TDIS 写 DAYS；CRS 未保存 | 部分实现 | 项目级 CRS/unit metadata；导入时检查或转换；API 返回单位 |
+| 项目创建与保存 | 项目包含边界、坐标系、单位、网格、地层、packages、运行记录 | 已有 `modflow_project` v1.0 和后端 project.json；前端项目包仍靠 state/CSV 恢复地质缓存 | 部分实现 | 建立 geology/flow/run schema；保存/打开后可无损复现同一 MF6 输入文件 |
+| CRS 和单位 | 明确 CRS、长度单位、时间单位、流量单位 | Project Schema 已要求 CRS 和 `m/day/m3/day` 单位；Shapefile CRS 读取/转换未实现 | 部分实现 | 导入时检查 CRS；需要转换时显式记录；API 返回单位 |
 | 边界导入 | 支持面边界，多 polygon、内洞、属性检查 | 读取首个 shp 的首个外环 | 部分实现 | 支持选择/合并 polygon；保存 CRS；报告面积和坐标范围 |
 | 钻孔导入 | 校验列名、坐标、层序、Top/Bottom/厚度 | 能读 CSV/XLSX 并推算 Top/Bottom | 部分实现 | 严格 schema 校验；异常行报告；层序和厚度检查 |
 | 地层建模 | 可复现的地层面、尖灭处理、层厚下限规则 | RBF/nearest 插值，强制层序不交叉 | 部分实现 | 插值算法参数化；基准钻孔案例验证；保存地层面 |
@@ -46,13 +46,13 @@
 | MODPATH 粒子追踪 | 粒子释放、方向、路径结果 | 后端部分实现；前端事件未转发；路径硬编码 | 存在明显错误 | 修复触发链路；配置 mpath7；基准路径测试 |
 | OBJ 导出 | 可导出当前模型几何和结果 | 后端从 points 推断 cell size 导出 OBJ | 部分实现 | 使用真实 delr/delc；记录坐标轴约定；测试导出 |
 | 输入验证 | 所有 API schema/范围/单位检查 | 多数 API 只捕获异常 | 部分实现 | Pydantic/dataclass 或等效 schema；错误可定位到字段 |
-| 自动化测试 | 单元、API、数值回归 | 未发现测试 | 未实现 | 至少覆盖网格、package 写入、标准模型水头/budget |
-| 标准模型基准 | 官方或可重复标准模型 | 无 | 未实现 | 建立 MF6 benchmark suite，固定容差 |
+| 自动化测试 | 单元、API、数值回归 | 已有 MF6 executable、workspace、Project Schema/API、隔离和最小稳定流 benchmark 测试 | 部分实现 | 扩展到网格、package 写入、API schema、更多标准模型 |
+| 标准模型基准 | 官方或可重复标准模型 | 已有单层稳定流最小 benchmark | 部分实现 | 建立多 package benchmark suite，固定容差 |
 
 ## 最重要的差距
 
 1. UI 和 FloPy package 不一致：DRN/GHB/RCH/EVT/MODPATH 是最明显断点。
-2. 没有项目级 schema，无法保证保存/打开后复现同一模型。
+2. 已有项目级 schema，但还没有正式 geology/flow/run schema，仍无法保证保存/打开后复现同一 MF6 输入文件。
 3. 没有数值验收，不能判定结果是否收敛、守恒、可复核。
 4. 网格索引在前端和后端各算一遍，存在 row/col 偏差风险。
 5. MODPATH 路径、run manifest 和运行目录清理策略仍需后续完善。

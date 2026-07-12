@@ -16,13 +16,25 @@
       <span class="tip file-selected" v-else><i class="el-icon-document"></i> {{ selectedFile.name }}</span>
     </div>
 
+    <div class="unit-tip mt-10" v-if="units">
+      单位：长度 {{ units.horizontal_length }}，时间 {{ units.time }}，流量 {{ units.flow }}
+    </div>
+    <el-alert
+      v-else
+      title="请先创建工程，明确 CRS 和单位后再导入钻孔"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="mt-10"
+    ></el-alert>
+
     <el-button 
       type="primary" 
       size="small"
       class="full-btn mt-10" 
       @click="uploadBoreholes" 
       :loading="isUploading" 
-      :disabled="!selectedFile"
+      :disabled="!selectedFile || !props.projectId"
     >
       <i class="el-icon-cpu"></i> {{ isUploading ? '正在解析地层数据...' : '解析地层并构建模型' }}
     </el-button>
@@ -64,6 +76,10 @@ import { ref } from 'vue';
 import axios from 'axios';
 
 const API_BASE_URL = 'http://localhost:5000'; 
+const props = defineProps({
+  projectId: { type: String, default: null },
+  units: { type: Object, default: null }
+});
 const selectedFile = ref(null);
 const isUploading = ref(false);
 const uploadResult = ref(null);
@@ -78,6 +94,10 @@ const handleFileChange = (file) => {
 
 const uploadBoreholes = async () => {
   if (!selectedFile.value) return;
+  if (!props.projectId) {
+    errorMessage.value = '请先创建工程';
+    return;
+  }
 
   // 使用 FileReader 读取 CSV 文本内容，用于保存进项目 JSON 中
   const reader = new FileReader();
@@ -86,7 +106,7 @@ const uploadBoreholes = async () => {
 
     const formData = new FormData();
     formData.append('file', selectedFile.value);
-    formData.append('project_id', 'default'); 
+    formData.append('project_id', props.projectId); 
 
     isUploading.value = true;
     uploadResult.value = null;
@@ -126,6 +146,7 @@ const uploadBoreholes = async () => {
 .upload-component { line-height: 1; }
 .tip { font-size: 11px; color: #909399; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-selected { color: #409EFF; font-weight: bold; }
+.unit-tip { font-size: 12px; color: #606266; background: #f7f9fb; border: 1px solid #ebeef5; padding: 7px 9px; border-radius: 4px; }
 
 /* 统一的按钮间距 */
 .full-btn { width: 100%; letter-spacing: 1px; font-weight: bold; }

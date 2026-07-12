@@ -9,6 +9,7 @@ __pycache__/
 # 忽略 MODFLOW 运行生成的临时模型文件
 backend/temp_model/
 backend/workspace/
+backend/projects/
 
 # 忽略压缩包和执行程序
 *.zip

@@ -34,7 +34,7 @@
         <template slot="title">
           <span class="step-title"><i class="el-icon-s-operation"></i> Step 5: 源汇项 (RCH/EVT) & 边界</span>
         </template>
-        <RchEvtManager @update="(val) => $emit('update-rch-evt', val)" />
+        <RchEvtManager :projectId="projectId" @update="(val) => $emit('update-rch-evt', val)" />
         <div style="margin-top: 10px;"></div>
         <BoundaryPanel 
           :selectedIndex="currentSegmentIdx" 
@@ -101,6 +101,7 @@ export default {
     loading: { type: Boolean, default: false },
     resultPoints: { type: Array, default: () => [] },
     currentLogs: { type: String, default: '' },
+    projectId: { type: String, default: null },
     panelTitle: { type: String, default: '模型参数与运行 (Step 3-7)' },
     showGridSettings: { type: Boolean, default: true },
     showAnalysis: { type: Boolean, default: true }

@@ -11,11 +11,13 @@
           <div class="upload-bar">
             <el-upload
               action="http://localhost:5000/upload-scatter"
+              :data="uploadData"
               :show-file-list="false"
+              :before-upload="beforeUpload"
               :on-success="onRchSuccess"
               accept=".csv, .xlsx, .xls"
             >
-              <el-button size="mini" type="primary" icon="el-icon-upload">导入散点数据</el-button>
+              <el-button size="mini" type="primary" icon="el-icon-upload" :disabled="!projectId">导入散点数据</el-button>
             </el-upload>
             <el-button size="mini" type="text" @click="downloadTemplate">下载模板</el-button>
           </div>
@@ -58,11 +60,13 @@
           <div class="upload-bar">
             <el-upload
               action="http://localhost:5000/upload-scatter"
+              :data="uploadData"
               :show-file-list="false"
+              :before-upload="beforeUpload"
               :on-success="onEvtSuccess"
               accept=".csv, .xlsx, .xls"
             >
-              <el-button size="mini" type="warning" icon="el-icon-upload">导入散点数据</el-button>
+              <el-button size="mini" type="warning" icon="el-icon-upload" :disabled="!projectId">导入散点数据</el-button>
             </el-upload>
             <el-button size="mini" type="text" @click="downloadTemplate">下载模板</el-button>
           </div>
@@ -107,6 +111,9 @@
 <script>
 export default {
   name: 'RchEvtManager',
+  props: {
+    projectId: { type: String, default: null }
+  },
   data() {
     return {
       activeTab: 'rch',
@@ -116,6 +123,11 @@ export default {
       showEvtContour: false
     };
   },
+  computed: {
+    uploadData() {
+      return { project_id: this.projectId || '' };
+    }
+  },
   watch: {
     rchList: { deep: true, handler() { this.emitData(); } },
     evtList: { deep: true, handler() { this.emitData(); } },
@@ -123,6 +135,13 @@ export default {
     showEvtContour() { this.emitData(); }
   },
   methods: {
+    beforeUpload() {
+      if (!this.projectId) {
+        this.$message.warning('请先创建工程');
+        return false;
+      }
+      return true;
+    },
     onRchSuccess(res) {
       if (res.success) {
         this.rchList = res.data;

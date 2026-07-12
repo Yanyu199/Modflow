@@ -8,6 +8,7 @@
 flowchart LR
   Browser["Vue 2 / Element UI / Plotly / Three.js"]
   Flask["Flask API"]
+  ProjectStore["ProjectStore / project.json"]
   Geo["GeoPandas / Shapely"]
   Modeler["GeologicalModeler"]
   Grid["geometry_tools.generate_grid_info"]
@@ -17,6 +18,8 @@ flowchart LR
   Three["Real3DViewer"]
 
   Browser -->|upload shapefile zip| Flask
+  Browser -->|create/read/update project| Flask
+  Flask --> ProjectStore
   Flask --> Geo
   Geo -->|boundary coords| Browser
 
@@ -60,7 +63,7 @@ flowchart LR
 2. `GeologicalModeler` 读取表格。
 3. `preprocess_data()` 读取 `钻孔名称`、`X`、`Y`、`Z`、`分层ID`、`Top/Bottom` 或 `分层厚度`。
 4. 如果没有 Top/Bottom，则用 `Z - 累积厚度` 推算。
-5. 后端以 `GEO_MODELS[project_id] = geo_model` 保存模型，前端几乎总是传 `project_id='default'`。
+5. 后端要求显式 `project_id` 且项目必须存在，然后以 `GEO_MODELS[project_id] = geo_model` 缓存派生地质模型。
 6. 前端保存 `rawCsvContent`，项目加载时重新调用 `/upload-boreholes` 以恢复后端状态。
 
 限制：
@@ -197,9 +200,13 @@ flowchart LR
 
 | API | 前端接入 | 后端实现 | 状态 |
 |---|---:|---:|---|
-| `POST /upload-boreholes` | 是 | 是 | 可用，但校验不足 |
-| `POST /upload-faults` | 是 | 是 | 可用，只影响插值 |
-| `POST /upload-shapefile` | 是 | 是 | 可用，但 CRS/安全校验不足 |
+| `POST /projects/validate` | 间接 | 是 | 校验完整 Project Schema |
+| `POST /projects` | 是 | 是 | 创建项目并返回稳定 `project_id` |
+| `GET /projects/<project_id>` | 否 | 是 | 后端可读取项目定义 |
+| `PUT /projects/<project_id>` | 是 | 是 | 更新项目元数据/CRS/单位 |
+| `POST /upload-boreholes` | 是 | 是 | 要求显式 `project_id`；数据校验不足 |
+| `POST /upload-faults` | 是 | 是 | 要求显式 `project_id`；只影响插值 |
+| `POST /upload-shapefile` | 是 | 是 | 要求显式 `project_id`；CRS/安全校验不足 |
 | `POST /upload-zone` | 否 | 是 | 后端已实现但 UI 未接入 |
 | `POST /upload-scatter` | 是 | 否 | UI 已存在但后端未实现 |
 | `POST /preview-geometry` | 是 | 是 | 可用，依赖后端全局钻孔模型 |
@@ -210,10 +217,11 @@ flowchart LR
 
 | 状态 | 位置 | 风险 |
 |---|---|---|
-| 钻孔地质模型 | Flask 全局 `GEO_MODELS` | 多用户冲突，进程重启丢失 |
-| 边界、断层、井、K、RCH/EVT | `App.vue` 内存 | 刷新丢失，保存格式非正式 |
+| 项目定义 | `backend/projects/<project_id>/project.json` | 已持久化；仍无数据库/权限系统 |
+| 钻孔地质模型 | Flask 全局 `GEO_MODELS[project_id]` | 项目间隔离；进程重启后需由源数据恢复 |
+| 边界、断层、井、K、RCH/EVT | `App.vue` 内存和前端项目包 | 刷新丢失，正式 Flow/Geology schema 待实现 |
 | 运行输入/输出 | `backend/workspace/<run-id>` | 失败默认保留；成功保留可配置；正式 run history 待实现 |
-| 前端项目文件 | 浏览器下载 JSON | 无 schema/version/migration |
+| 前端项目文件 | 浏览器下载 `modflow_project_bundle` JSON | 有项目 schema；地质/流场 state 仍是兼容包 |
 | MF6/MODPATH 可执行路径 | `mf6_executable.py` / `mf6_wrapper.py` | MF6 已统一解析；MODPATH 仍是后续技术债 |
 
 ## Recommended Target Architecture

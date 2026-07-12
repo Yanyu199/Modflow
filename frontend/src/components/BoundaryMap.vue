@@ -2,25 +2,27 @@
   <div class="map-container-wrapper">
     <div class="header-actions">
       <el-upload
-        action="http://localhost:5000/upload-shapefile"
+        :action="`${apiBaseUrl}/upload-shapefile`"
+        :data="uploadData"
         :show-file-list="false"
         :on-success="onUploadSuccess"
         :on-error="onUploadError"
         :before-upload="beforeUpload"
         accept=".zip"
       >
-        <el-button type="primary" icon="el-icon-upload" size="small">上传边界</el-button>
+        <el-button type="primary" icon="el-icon-upload" size="small" :disabled="!projectId">上传边界</el-button>
       </el-upload>
 
       <el-upload
-        action="http://localhost:5000/upload-faults"
+        :action="`${apiBaseUrl}/upload-faults`"
+        :data="uploadData"
         :show-file-list="false"
         :on-success="onFaultsUploadSuccess"
         :before-upload="beforeFaultUpload"
         accept=".csv,.xlsx,.xls"
         style="margin-left: 10px;"
       >
-        <el-button type="warning" icon="el-icon-data-line" size="small">上传断层</el-button>
+        <el-button type="warning" icon="el-icon-data-line" size="small" :disabled="!projectId">上传断层</el-button>
       </el-upload>
 
       <el-radio-group v-model="mode" size="small" style="margin-left: auto;">
@@ -55,7 +57,8 @@ export default {
     configuredData: Object,
     wells: Array,
     kCells: Array,
-    faults: Array // 新增：接收断层数据
+    faults: Array, // 新增：接收断层数据
+    projectId: { type: String, default: null }
   },
   data() {
     return {
@@ -68,6 +71,14 @@ export default {
       clickedCell: null,
       dragState: { isDragging: false, startX: 0, startY: 0, startRangeX: null, startRangeY: null }
     };
+  },
+  computed: {
+    apiBaseUrl() {
+      return 'http://localhost:5000';
+    },
+    uploadData() {
+      return { project_id: this.projectId || '' };
+    }
   },
   watch: {
     mode() { this.clickedCell = null; this.drawMap(); },
@@ -89,6 +100,10 @@ export default {
       }
     },
     beforeUpload(file) {
+      if (!this.projectId) {
+        this.$message.warning('请先创建工程');
+        return false;
+      }
       const ok = file.name.toLowerCase().endsWith('.zip');
       if (!ok) this.$message.error('请上传包含 Shapefile 的 .zip 文件');
       return ok;
@@ -113,6 +128,10 @@ export default {
     },
     // 新增：断层文件上传前校验
     beforeFaultUpload(file) { 
+      if (!this.projectId) {
+        this.$message.warning('请先创建工程');
+        return false;
+      }
       const ext = file.name.split('.').pop().toLowerCase();
       return ['csv', 'xlsx', 'xls'].includes(ext);
     },

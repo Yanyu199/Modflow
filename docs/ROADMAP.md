@@ -9,7 +9,7 @@
 - 固定当前原型的事实文档。
 - 建立最小测试框架和运行 artifact 策略。
 - 增加 MF6/MODPATH 可执行文件自检设计。
-- 明确项目 schema 的第一版草案。
+- 建立项目 schema 的第一版实现。
 
 前置条件：
 
@@ -31,7 +31,7 @@
 主要风险：
 
 - 运行目录保留基础已建立，仍需正式 run manifest 和清理策略。
-- MF6 路径当前不可靠，可能阻塞所有基准测试。
+- MF6 路径已通过 resolver 和测试覆盖；仍需在正式 run manifest 中记录版本。
 
 ## Phase 1: Trusted Single-Period Steady Flow Core
 
@@ -71,10 +71,10 @@
 
 功能范围：
 
-- 定义 `Project`、`Grid`、`LayerModel`、`PackageConfig`、`Run` 数据结构。
+- `Project` schema v1.0 已完成，后续继续定义 `Grid`、`LayerModel`、`PackageConfig`、`Run` 数据结构。
 - 输入验证：文件、字段、单位、坐标、层序、参数范围。
-- 项目保存/打开改为正式 schema，包含版本号和迁移策略。
-- 后端不依赖 Flask 全局状态恢复项目。
+- 项目保存/打开已包含正式 project schema；地质和流场 state 仍需迁移到正式 schema。
+- 后端项目定义不依赖 Flask 全局状态；地质派生模型仍是 `GEO_MODELS[project_id]` 缓存。
 
 前置条件：
 
@@ -82,7 +82,7 @@
 
 验收标准：
 
-- 项目 JSON 有 schema version。
+- 项目 JSON 有 schema version。已完成 `modflow_project` v1.0。
 - 打开旧项目时有兼容路径或明确报错。
 - API 对错误字段返回结构化错误。
 - 单元测试覆盖钻孔表、边界、多层 top/botm、K/WEL/CHD 配置。
@@ -93,7 +93,7 @@
 
 主要风险：
 
-- 当前项目保存依赖 `rawCsvContent`，XLSX 和大型数据不适合作为长期方案。
+- 当前地质恢复仍依赖 `rawCsvContent`，XLSX 和大型数据不适合作为长期方案。
 - 修改数据结构会影响前端多处组件，必须小步迁移。
 
 ## Phase 3: Boundary And Source/Sink Completion
@@ -247,12 +247,12 @@
 - 当前 `MP7_EXE_PATH` 硬编码。
 - `process_pathlines()` 对坐标 origin 的处理需要验证。
 
-## 推荐的第一个开发任务
+## 推荐的下一个开发任务
 
-建议第一个开发任务是：建立“可复核单层稳定流最小模型”测试与运行 artifact 保留机制。
+建议下一个开发任务是：建立正式 `geology_model_v1` Schema 和后端校验接口。
 
 原因：
 
-- 它不要求大规模重写。
-- 它能立刻暴露 MF6 路径、运行目录删除、收敛、budget、前后端参数是否真正进入 package 等根问题。
-- 后续所有 UI 和地质功能都可以围绕这个基准避免数值退化。
+- 它承接本轮 Project Schema。
+- 它能把边界、钻孔、断层、插值参数和地层面从前端临时 state 中剥离出来。
+- 它是后续后端唯一网格、Flow Model Schema 和保存/打开复现的前置条件。

@@ -12,6 +12,13 @@
       </div>
       
       <div class="header-tools">
+        <span class="project-context" :class="{ missing: !currentProject }">
+          <i class="el-icon-collection-tag"></i>
+          {{ projectContextLabel }}
+        </span>
+        <el-button type="text" icon="el-icon-setting" class="header-btn" @click="projectDialogVisible = true">
+          工程设置
+        </el-button>
         <el-button type="text" icon="el-icon-download" class="header-btn" @click="saveProject">
           保存项目
         </el-button>
@@ -57,6 +64,7 @@
             :wells="wells" 
             :kCells="kCells"
             :faults="faults"
+            :projectId="projectId"
           />
           
           <div class="step-divider">
@@ -64,6 +72,8 @@
           </div>
           
           <LayerPanel 
+            :projectId="projectId"
+            :units="currentProject ? currentProject.units : null"
             @model-ready="onModelReady" 
             @preview-boreholes="onPreviewBoreholes"
           />
@@ -123,6 +133,7 @@
             :wells="wells"
             :kCells="kCells"
             :faults="faults"
+            :projectId="projectId"
           />
         </el-card>
 
@@ -196,6 +207,7 @@
           :loading="loading"
           :resultPoints="resultPoints"
           :currentLogs="currentLogs"
+          :projectId="projectId"
           panelTitle="水动力场参数与运行"
           :showGridSettings="false"
           :showAnalysis="false"
@@ -247,6 +259,14 @@
         <el-button type="primary" @click="saveCellProperty" size="small">保存</el-button>
       </span>
     </el-dialog>
+
+    <ProjectSettingsDialog
+      :visible.sync="projectDialogVisible"
+      :project="currentProject"
+      :hasModelData="hasAnyModelData"
+      :submitting="projectSubmitting"
+      @submit="saveProjectSettings"
+    />
   </div>
 </template>
 
@@ -257,6 +277,7 @@ import ModelParametersPanel from './components/ModelParametersPanel.vue';
 import LayerPanel from './components/LayerPanel.vue'; 
 import GridSettings from './components/GridSettings.vue';
 import AnalysisPanel from './components/AnalysisPanel.vue';
+import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
 import axios from 'axios';
 
 export default {
@@ -267,10 +288,15 @@ export default {
     ModelParametersPanel,
     LayerPanel,
     GridSettings,
-    AnalysisPanel
+    AnalysisPanel,
+    ProjectSettingsDialog
   },
   data() {
     return {
+      currentProject: null,
+      projectDialogVisible: true,
+      projectSubmitting: false,
+      pendingLegacyProjectState: null,
       activePage: 'geology',
       boundary: null, 
       faults: [], // 新增：保存断层数据
@@ -293,6 +319,26 @@ export default {
     };
   },
   computed: {
+    projectId() {
+      return this.currentProject ? this.currentProject.project_id : null;
+    },
+    hasAnyModelData() {
+      return Boolean(
+        this.boundary
+        || this.rawCsvContent
+        || this.faults.length > 0
+        || this.wells.length > 0
+        || this.kCells.length > 0
+        || Object.keys(this.boundaryConfigs).length > 0
+        || this.resultPoints.length > 0
+      );
+    },
+    projectContextLabel() {
+      if (!this.currentProject) return '未创建工程';
+      const crs = this.currentProject.crs || {};
+      const units = this.currentProject.units || {};
+      return `${this.currentProject.name} | EPSG:${crs.code} | ${units.horizontal_length}/${units.time}, ${units.flow}`;
+    },
     hasGeologyModel() {
       return Boolean(this.rawCsvContent && this.layerMapping && Object.keys(this.layerMapping).length > 0);
     },
@@ -310,7 +356,83 @@ export default {
       this.syncVisibleMap();
     }
   },
+  mounted() {
+    if (!this.currentProject) {
+      this.projectDialogVisible = true;
+    }
+  },
   methods: {
+    ensureProjectContext(actionLabel = '继续操作') {
+      if (this.currentProject && this.projectId) return true;
+      this.projectDialogVisible = true;
+      this.$message.warning(`${actionLabel}前请先创建工程，明确 CRS 和单位`);
+      return false;
+    },
+    async saveProjectSettings(payload) {
+      this.projectSubmitting = true;
+      try {
+        let response;
+        if (this.currentProject) {
+          response = await axios.put(`http://localhost:5000/projects/${this.projectId}`, payload);
+        } else {
+          response = await axios.post('http://localhost:5000/projects', payload);
+        }
+        if (response.data.success) {
+          this.currentProject = response.data.project;
+          this.projectDialogVisible = false;
+          this.$message.success(this.pendingLegacyProjectState ? '工程已创建，正在导入旧项目数据' : '工程上下文已保存');
+          if (this.pendingLegacyProjectState) {
+            const state = this.pendingLegacyProjectState;
+            this.pendingLegacyProjectState = null;
+            await this.applyProjectState(state, { restoreBackend: true });
+          }
+        } else {
+          this.$message.error(response.data.error || '工程保存失败');
+        }
+      } catch (err) {
+        this.$message.error(err.response?.data?.error || '工程保存失败');
+      } finally {
+        this.projectSubmitting = false;
+      }
+    },
+    async ensureBackendProject(project) {
+      if (!project || !project.project_id) throw new Error('项目文件缺少 project_id');
+      try {
+        const createRes = await axios.post('http://localhost:5000/projects', project);
+        this.currentProject = createRes.data.project;
+      } catch (err) {
+        if (err.response && err.response.status === 409) {
+          const updateRes = await axios.put(`http://localhost:5000/projects/${project.project_id}`, project);
+          this.currentProject = updateRes.data.project;
+        } else {
+          throw err;
+        }
+      }
+    },
+    async applyProjectState(state, options = {}) {
+      if (state.boundary) this.boundary = state.boundary;
+      if (state.faults) this.faults = state.faults;
+      if (state.gridConfig) this.gridConfig = state.gridConfig;
+      if (state.boundaryConfigs) this.boundaryConfigs = state.boundaryConfigs;
+      if (state.wells) this.wells = state.wells;
+      if (state.kCells) this.kCells = state.kCells;
+      if (state.rchData) this.rchData = state.rchData;
+      if (state.evtData) this.evtData = state.evtData;
+      if (state.layerMapping) this.layerMapping = state.layerMapping;
+      if (state.rawCsvContent) this.rawCsvContent = state.rawCsvContent;
+      if (state.boreholesData) this.boreholesData = state.boreholesData;
+
+      this.resultPoints = [];
+      this.currentLogs = '';
+      this.activeStep = '3';
+
+      if (options.restoreBackend && this.rawCsvContent) {
+        this.$message.info("正在恢复后端地质模型，请稍候...");
+        await this.restoreBackendGeologyFromCsv();
+      }
+      this.syncVisibleMap();
+      if (this.rawCsvContent) await this.fetchGridPreview();
+    },
     getMapGridSize() {
       if (!this.boundary || this.boundary.length === 0) return 50;
       if (this.gridConfig.x_mode === 'size') {
@@ -355,6 +477,7 @@ export default {
       return {
         schema_version: 'geology_model_v1',
         exported_at: new Date().toISOString(),
+        project_context: this.currentProject,
         boundary: this.boundary,
         faults: this.faults,
         gridConfig: this.gridConfig,
@@ -369,6 +492,7 @@ export default {
     },
 
     exportGeologyModel() {
+      if (!this.ensureProjectContext('导出地质体模型')) return;
       if (!this.rawCsvContent || !this.layerMapping || Object.keys(this.layerMapping).length === 0) {
         this.$message.warning('请先导入并解析钻孔数据，再导出地质体模型');
         return;
@@ -381,11 +505,12 @@ export default {
     },
 
     async restoreBackendGeologyFromCsv() {
+      if (!this.ensureProjectContext('恢复后端地质模型')) return;
       if (!this.rawCsvContent) return;
       const blob = new Blob([this.rawCsvContent], { type: 'text/csv' });
       const formData = new FormData();
       formData.append('file', blob, 'recovered_boreholes.csv');
-      formData.append('project_id', 'default');
+      formData.append('project_id', this.projectId);
       await axios.post('http://localhost:5000/upload-boreholes', formData);
     },
 
@@ -403,18 +528,25 @@ export default {
     },
 
     saveProject() {
+      if (!this.ensureProjectContext('保存项目')) return;
       const projectData = {
-        boundary: this.boundary,
-        faults: this.faults, // 保存时包含断层
-        gridConfig: this.gridConfig,
-        boundaryConfigs: this.boundaryConfigs,
-        wells: this.wells,
-        kCells: this.kCells,
-        rchData: this.rchData,
-        evtData: this.evtData,
-        layerMapping: this.layerMapping,
-        rawCsvContent: this.rawCsvContent,
-        boreholesData: this.boreholesData
+        schema_name: 'modflow_project_bundle',
+        schema_version: '1.0',
+        exported_at: new Date().toISOString(),
+        project: this.currentProject,
+        state: {
+          boundary: this.boundary,
+          faults: this.faults,
+          gridConfig: this.gridConfig,
+          boundaryConfigs: this.boundaryConfigs,
+          wells: this.wells,
+          kCells: this.kCells,
+          rchData: this.rchData,
+          evtData: this.evtData,
+          layerMapping: this.layerMapping,
+          rawCsvContent: this.rawCsvContent,
+          boreholesData: this.boreholesData
+        }
       };
       
       this.downloadJsonFile(projectData, `project_${new Date().toISOString().slice(0,10)}.json`);
@@ -428,6 +560,10 @@ export default {
         try {
           const json = JSON.parse(e.target.result);
           const model = json.schema_version === 'geology_model_v1' ? json : json.geologyModel || json;
+          if (!this.currentProject && model.project_context) {
+            await this.ensureBackendProject(model.project_context);
+          }
+          if (!this.ensureProjectContext('加载地质体模型')) return;
 
           this.boundary = model.boundary || null;
           this.faults = model.faults || [];
@@ -469,32 +605,30 @@ export default {
       reader.onload = async (e) => {
         try {
           const json = JSON.parse(e.target.result);
-          if (json.boundary) this.boundary = json.boundary;
-          if (json.faults) this.faults = json.faults; // 加载时恢复断层
-          if (json.gridConfig) this.gridConfig = json.gridConfig;
-          if (json.boundaryConfigs) this.boundaryConfigs = json.boundaryConfigs;
-          if (json.wells) this.wells = json.wells;
-          if (json.kCells) this.kCells = json.kCells;
-          if (json.rchData) this.rchData = json.rchData;
-          if (json.evtData) this.evtData = json.evtData;
-          
-          if (json.layerMapping) this.layerMapping = json.layerMapping;
-          if (json.rawCsvContent) this.rawCsvContent = json.rawCsvContent;
-          if (json.boreholesData) this.boreholesData = json.boreholesData;
-
-          this.resultPoints = [];
-          this.currentLogs = '';
-          this.activeStep = '3';
-
-          if (this.rawCsvContent) {
-              this.$message.info("正在唤醒 3D 地质模型，请稍候...");
-              await this.restoreBackendGeologyFromCsv();
+          if (json.schema_name === 'modflow_project_bundle' && json.project && json.state) {
+            await this.ensureBackendProject(json.project);
+            await this.applyProjectState(json.state, { restoreBackend: true });
+            this.$message.success("项目加载成功！");
+            return;
           }
 
-          this.$message.success("项目加载成功！");
-
-          this.syncVisibleMap();
-          this.fetchGridPreview();
+          if (!this.currentProject) {
+            this.pendingLegacyProjectState = json;
+            this.projectDialogVisible = true;
+            this.$message.warning("旧项目文件缺少正式 Project Schema，请先补充 CRS 和单位创建工程");
+            return;
+          }
+          try {
+            await this.$confirm(
+              '旧项目文件缺少正式 Project Schema，将导入到当前工程上下文中，不会自动猜测 CRS 或单位。是否继续？',
+              '导入旧项目',
+              { type: 'warning' }
+            );
+          } catch (e) {
+            return;
+          }
+          await this.applyProjectState(json, { restoreBackend: true });
+          this.$message.success("旧项目数据已导入当前工程");
         } catch (err) {
           console.error(err);
           this.$message.error("无法解析项目文件，或后端地质重建失败");
@@ -520,6 +654,7 @@ export default {
     },
     
     onPreviewGrid(payload) { 
+      if (!this.ensureProjectContext('预览网格')) return;
       this.gridConfig = { ...this.gridConfig, ...payload.config };
       if(this.$refs.mapRef)
       this.$refs.mapRef.previewGrid(this.getMapGridSize()); 
@@ -527,9 +662,10 @@ export default {
     },
 
     async fetchGridPreview() {
+      if (!this.ensureProjectContext('预览网格')) return;
       try {
         const res = await axios.post('http://localhost:5000/preview-geometry', {
-          project_id: 'default',
+          project_id: this.projectId,
           boundary: this.boundary,
           params: this.gridConfig,
           faults: this.faults // 携带断层数据传给后端进行切分插值
@@ -626,6 +762,7 @@ export default {
     },
 
     async handleRun(partialParams, mpCell = null) {
+      if (!this.ensureProjectContext('运行模型')) return;
       this.loading = true;
       this.currentLogs = '';
       
@@ -644,7 +781,7 @@ export default {
       
       try {
         const res = await axios.post('http://localhost:5000/run-model', {
-          project_id: 'default', 
+          project_id: this.projectId, 
           boundary: this.boundary, 
           params: fullParams, 
           boundary_conditions: boundaryList, 
@@ -706,6 +843,26 @@ body { margin: 0; padding: 0; overflow: hidden; font-family: "Helvetica Neue", H
 .header-tools { display: flex; align-items: center; }
 .header-btn { color: #e4e7ed !important; font-size: 14px; margin-left: 10px; }
 .header-btn:hover { color: #409EFF !important; }
+.project-context {
+  display: inline-flex;
+  align-items: center;
+  max-width: 320px;
+  padding: 0 10px;
+  height: 28px;
+  line-height: 28px;
+  border: 1px solid rgba(255,255,255,0.22);
+  border-radius: 4px;
+  color: #e4e7ed;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-context i { margin-right: 5px; }
+.project-context.missing {
+  color: #f6c36a;
+  border-color: rgba(246,195,106,0.45);
+}
 .app-title { flex: 0 0 auto; font-size: 16px; white-space: nowrap; }
 .workflow-nav { flex: 1 1 auto; min-width: 0; display: flex; justify-content: center; }
 .workflow-nav .el-radio-button__inner {

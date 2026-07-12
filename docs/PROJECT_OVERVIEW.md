@@ -84,9 +84,9 @@
 前端：
 
 - Vue 2.7、Element UI、Three.js、Plotly、Axios。
-- 所有主要项目状态保存在 `App.vue` 的内存对象中。
+- 项目上下文由 `App.vue` 的 `currentProject` 统一持有，并通过 `projectId` prop 传给子组件。
 - API 地址多处硬编码为 `http://localhost:5000`。
-- 项目保存为浏览器下载的 JSON 文件，加载时尝试用保存的原始钻孔 CSV 重建后端地质模型。
+- 项目定义使用 `modflow_project` schema v1.0，可由后端保存到 `backend/projects/<project_id>/project.json`；前端项目包仍是浏览器下载 JSON。
 
 后端：
 
@@ -94,7 +94,8 @@
 - FloPy 创建 MODFLOW 6 GWF 模型。
 - GeoPandas/Shapely 解析边界和分区 Shapefile。
 - SciPy RBF/griddata 根据钻孔生成地层顶底板。
-- `GEO_MODELS` 全局字典保存 `GeologicalModeler`。
+- `GEO_MODELS` 全局字典仍缓存 `GeologicalModeler`，但现在按显式 `project_id` 隔离，且项目不存在时拒绝写入。
+- `ProjectStore` 文件存储保存正式项目定义，进程重启后可重新读取项目元数据。
 - MF6 运行目录使用 `backend/workspace/<run-id>`，失败默认保留，成功保留由环境变量控制。
 
 ## 已真正实现的核心功能
@@ -125,10 +126,10 @@
 - 数值模型目前固定为单应力期，未形成稳定流/非稳定流的明确建模语义。
 - UI 中的若干能力没有真正写入 FloPy package，例如 DRN、GHB、RCH/EVT 散点导入。
 - MF6 可执行文件已通过统一 resolver 处理；MODPATH 路径仍是后续技术债。
-- 后端全局状态和默认 `project_id` 不支持并发用户。
+- 正常流程已不再隐式使用 `project_id='default'`；后端项目相关接口要求显式 `project_id`。
 - 运行目录已改为独立目录，失败默认保留；正式 run manifest 和清理策略仍需完善。
-- 没有自动化测试、标准模型回归测试、水量平衡验收和收敛验收。
-- CRS、长度单位、时间单位、抽水率单位、补给/蒸发单位没有统一的项目级定义。
+- 已有自动化测试和最小稳定流数值基准；主应用运行结果仍缺正式水量平衡和收敛验收。
+- CRS、长度单位、时间单位和流量单位已进入 Project Schema；上传数据的 CRS 读取、重投影和各 package 单位换算仍未实现。
 
 ## 需要验证的信息
 

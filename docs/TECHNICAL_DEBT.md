@@ -81,24 +81,25 @@
 - 返回 convergence status、package budget、percent discrepancy。
 - 增加标准模型回归测试。
 
-### Flask 全局状态和默认 project_id
+### 地质派生状态仍是内存缓存
 
 现象：
 
-- `GEO_MODELS` 是进程内全局字典。
-- 前端几乎总是传 `project_id='default'`。
+- Project Schema v1.0 已建立，项目定义持久化到 `backend/projects/<project_id>/project.json`。
+- 正常流程不再隐式使用 `project_id='default'`，项目相关 API 要求显式 `project_id`。
+- `GEO_MODELS` 仍是进程内全局字典，只是已按 `project_id` 隔离。
 
 风险：
 
-- 多用户互相覆盖钻孔模型。
-- 进程重启后项目失效。
-- 并发运行和项目保存语义不可靠。
+- 进程重启后项目定义可恢复，但地质插值对象需要重新由钻孔源数据恢复。
+- 还没有正式 `geology_model_v1` 后端 schema，地质派生面不能独立复核。
+- 多进程部署时每个进程会有自己的 `GEO_MODELS` 缓存。
 
 建议：
 
-- 引入显式 project/run/session 数据结构。
-- 后端从持久化项目加载地质模型。
-- 所有 API 需要 project id 和权限/所有权策略。
+- 下一步建立 `geology_model_v1` schema 和后端校验接口。
+- 后续把钻孔源文件、地层面、插值参数和诊断保存到项目目录。
+- 多进程/多用户前再引入数据库或共享缓存。
 
 ## High
 
@@ -122,8 +123,9 @@
 
 现象：
 
+- Project Schema v1.0 已要求 CRS、水平长度、垂直长度、时间和流量单位。
 - Shapefile CRS 未保存或校验。
-- DIS 写 `METERS`，TDIS 写 `DAYS`，但项目级单位缺失。
+- DIS 写 `METERS`，TDIS 写 `DAYS`，当前 schema 只接受 `m/day/m3/day`，不做转换。
 - WEL、RCH、EVT UI 文案有单位，但 API 没有验证。
 
 风险：
@@ -132,9 +134,9 @@
 
 建议：
 
-- 项目 schema 必须包含 CRS、length unit、time unit、flow unit。
 - 上传数据时报告 CRS 和坐标范围。
 - 不同 CRS 数据必须拒绝或显式转换。
+- 给每个 package 增加单位校验和错误提示。
 
 ### 初始水头策略不明确
 
@@ -175,19 +177,20 @@
 
 现象：
 
-- 前端下载 JSON。
-- 后端钻孔模型通过 `rawCsvContent` 重新上传恢复。
-- 没有 schema version 和迁移。
+- 正式项目定义已使用 `modflow_project` schema v1.0。
+- 前端下载的项目包为 `modflow_project_bundle`，包含项目定义和当前 state。
+- 后端钻孔模型仍通过 `rawCsvContent` 重新上传恢复。
+- 地质体、流场配置和运行历史还没有各自的正式 schema。
 
 风险：
 
-- 旧项目不可迁移。
 - 二进制 XLSX、Shapefile、运行结果不能可靠保存。
+- 打开旧 JSON 需要用户补充项目 CRS/单位，不能完全自动迁移。
 
 建议：
 
-- 建立版本化 project schema。
 - 保存源文件引用或后端托管文件。
+- 建立 `geology_model_v1`、`flow_model_v1` 和 run manifest。
 - 保存运行历史和结果摘要。
 
 ## Medium

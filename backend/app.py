@@ -8,18 +8,98 @@ from geometry_utils import parse_shapefile_zip, parse_zone_shapefile
 from modflow_engine import run_simulation, get_grid_geometry
 from export_utils import generate_obj_string
 from geological_builder import GeologicalModeler
+from project_schema import ProjectValidationError
+from project_store import ProjectConflictError, ProjectNotFoundError, ProjectStore, validate_project_id
 
 app = Flask(__name__)
 CORS(app)
 
-# 用于存储全局的三维地质建模对象 (支持多项目/多用户场景可按 project_id 区分)
+# 受控的进程内派生状态缓存。项目定义持久化在 ProjectStore 中；这里的地质模型缓存可失效。
 GEO_MODELS = {}
+project_store = ProjectStore()
+
+
+def api_error(message, status=400, code="validation_error", details=None):
+    payload = {"success": False, "error": message, "code": code}
+    if details:
+        payload["details"] = details
+    return jsonify(payload), status
+
+
+def project_exception_response(exc):
+    if isinstance(exc, ProjectNotFoundError):
+        return api_error("项目不存在", 404, "project_not_found")
+    if isinstance(exc, ProjectConflictError):
+        return api_error("项目 ID 已存在", 409, "project_conflict")
+    if isinstance(exc, ProjectValidationError):
+        return api_error("项目数据无效", 400, "project_validation_error", exc.errors)
+    return api_error(str(exc), 400)
+
+
+def json_payload():
+    return request.get_json(silent=True) or {}
+
+
+def require_project_id(value):
+    if value is None or str(value).strip() == "":
+        raise ProjectValidationError("project_id is required")
+    return validate_project_id(str(value))
+
+
+def require_existing_project(project_id):
+    project_id = require_project_id(project_id)
+    project_store.get(project_id)
+    return project_id
+
+
+def require_project_from_form():
+    return require_existing_project(request.form.get("project_id"))
+
+
+def require_project_from_json(data):
+    return require_existing_project(data.get("project_id"))
+
+
+@app.route('/projects/validate', methods=['POST'])
+def validate_project():
+    try:
+        project = project_store.validate(json_payload())
+        return jsonify({"success": True, "project": project})
+    except Exception as e:
+        return project_exception_response(e)
+
+
+@app.route('/projects', methods=['POST'])
+def create_project():
+    try:
+        project = project_store.create(json_payload())
+        return jsonify({"success": True, "project": project}), 201
+    except Exception as e:
+        return project_exception_response(e)
+
+
+@app.route('/projects/<project_id>', methods=['GET'])
+def get_project(project_id):
+    try:
+        project = project_store.get(project_id)
+        return jsonify({"success": True, "project": project})
+    except Exception as e:
+        return project_exception_response(e)
+
+
+@app.route('/projects/<project_id>', methods=['PUT'])
+def update_project(project_id):
+    try:
+        project = project_store.update(project_id, json_payload())
+        return jsonify({"success": True, "project": project})
+    except Exception as e:
+        return project_exception_response(e)
 
 
 @app.route('/upload-boreholes', methods=['POST'])
 def upload_boreholes():
     try:
-        project_id = request.form.get('project_id', 'default')
+        project_id = require_project_from_form()
         file = request.files['file']
 
         geo_model = GeologicalModeler(file)
@@ -35,6 +115,8 @@ def upload_boreholes():
             "boreholes_count": len(geo_model.boreholes),
             "boreholes": frontend_data['boreholes']
         })
+    except (ProjectValidationError, ProjectNotFoundError) as e:
+        return project_exception_response(e)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -42,6 +124,7 @@ def upload_boreholes():
 @app.route('/upload-faults', methods=['POST'])
 def upload_faults():
     try:
+        require_project_from_form()
         file = request.files['file']
 
         # ⭐ 修改点 1：去掉 .stream，直接将 file 对象传给 pandas，兼容性更好
@@ -79,6 +162,8 @@ def upload_faults():
             "message": f"成功解析 {len(faults_data)} 条断层线",
             "faults": faults_data
         })
+    except (ProjectValidationError, ProjectNotFoundError) as e:
+        return project_exception_response(e)
     except Exception as e:
         # ⭐ 修改点 2：在终端强行打印出详细的错误追踪信息
         print("\n================== 断层文件读取失败 ==================")
@@ -90,8 +175,8 @@ def upload_faults():
 @app.route('/run-model', methods=['POST'])
 def run():
     try:
-        data = request.json
-        project_id = data.get('project_id', 'default')
+        data = json_payload()
+        project_id = require_project_from_json(data)
         boundary = data.get('boundary')
         params = data.get('params')
         custom_boundaries = data.get('boundary_conditions', [])
@@ -136,14 +221,16 @@ def run():
 
     except Exception as e:
         print(f"Error in /run-model: {e}")
+        if isinstance(e, (ProjectValidationError, ProjectNotFoundError)):
+            return project_exception_response(e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/preview-geometry', methods=['POST'])
 def preview_geometry():
     try:
-        data = request.json
-        project_id = data.get('project_id', 'default')
+        data = json_payload()
+        project_id = require_project_from_json(data)
         boundary = data.get('boundary')
         params = data.get('params')
         faults = data.get('faults', [])  # 获取断层数据
@@ -174,6 +261,8 @@ def preview_geometry():
             "boreholes": geo_model.get_frontend_data()['boreholes'],
             "layer_mapping": geo_model.get_frontend_data()['layer_mapping']  # 带上钻孔以便3D渲染
         })
+    except (ProjectValidationError, ProjectNotFoundError) as e:
+        return project_exception_response(e)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -181,9 +270,12 @@ def preview_geometry():
 @app.route('/upload-shapefile', methods=['POST'])
 def upload_shapefile():
     try:
+        require_project_from_form()
         file = request.files['file']
         coords = parse_shapefile_zip(file)
         return jsonify({"success": True, "data": coords})
+    except (ProjectValidationError, ProjectNotFoundError) as e:
+        return project_exception_response(e)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -191,9 +283,12 @@ def upload_shapefile():
 @app.route('/upload-zone', methods=['POST'])
 def upload_zone():
     try:
+        require_project_from_form()
         file = request.files['file']
         zones = parse_zone_shapefile(file)
         return jsonify({"success": True, "zones": zones})
+    except (ProjectValidationError, ProjectNotFoundError) as e:
+        return project_exception_response(e)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
