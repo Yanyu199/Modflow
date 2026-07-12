@@ -1,28 +1,27 @@
 # backend/mf6_wrapper.py
 import os
-import shutil
 import numpy as np
 import flopy
 from shapely.geometry import LineString, Point
+from mf6_executable import resolve_mf6_executable
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MF6_EXE_PATH = os.path.join(BASE_DIR, "bin", "mf6.exe")
-if not os.path.exists(MF6_EXE_PATH):
-    if shutil.which("mf6"): MF6_EXE_PATH = "mf6"
 
 # ⭐ MODPATH 7 路径
 MP7_EXE_PATH = r"G:\workspace\flopy-project\modpath7\bin\mpath7.exe"
 
 
 class MF6Builder:
-    def __init__(self, run_id, work_dir):
+    def __init__(self, run_id, work_dir, mf6_executable=None):
         self.run_id = run_id
         self.work_dir = work_dir
+        self.mf6_resolution = resolve_mf6_executable() if mf6_executable is None else None
+        self.mf6_executable = mf6_executable or self.mf6_resolution.path
         self.sim = None
         self.gwf = None
 
     def initialize_sim(self):
-        self.sim = flopy.mf6.MFSimulation(sim_name='sim', exe_name=MF6_EXE_PATH, sim_ws=self.work_dir)
+        self.sim = flopy.mf6.MFSimulation(sim_name='sim', exe_name=self.mf6_executable, sim_ws=self.work_dir)
         flopy.mf6.ModflowTdis(self.sim, nper=1, perioddata=[(1.0, 1, 1.0)], time_units='DAYS')
         # 求解器保持复杂模式
         flopy.mf6.ModflowIms(self.sim, complexity='COMPLEX', outer_maximum=1000, inner_maximum=200)

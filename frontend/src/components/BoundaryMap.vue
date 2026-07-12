@@ -5,6 +5,7 @@
         action="http://localhost:5000/upload-shapefile"
         :show-file-list="false"
         :on-success="onUploadSuccess"
+        :on-error="onUploadError"
         :before-upload="beforeUpload"
         accept=".zip"
       >
@@ -87,14 +88,28 @@ export default {
         Plotly.Plots.resize(this.$refs.plotDiv);
       }
     },
-    beforeUpload(file) { return file.name.endsWith('.zip'); },
+    beforeUpload(file) {
+      const ok = file.name.toLowerCase().endsWith('.zip');
+      if (!ok) this.$message.error('请上传包含 Shapefile 的 .zip 文件');
+      return ok;
+    },
     onUploadSuccess(res) {
       if (res.success) {
         this.boundary = res.data;
         this.gridLines = null; this.centerPoints = null; this.gridInfo = null; this.clickedCell = null;
         this.$emit('boundary-loaded', this.boundary);
         this.drawMap();
+      } else {
+        this.$message.error(res.error || '边界解析失败');
       }
+    },
+    onUploadError(err) {
+      let message = '边界上传失败，请检查后端服务和 ZIP 文件';
+      try {
+        const response = err && err.target && err.target.response ? JSON.parse(err.target.response) : null;
+        if (response && response.error) message = response.error;
+      } catch(e) {}
+      this.$message.error(message);
     },
     // 新增：断层文件上传前校验
     beforeFaultUpload(file) { 

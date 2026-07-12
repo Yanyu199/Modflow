@@ -1,22 +1,24 @@
 # backend/modflow_engine.py
-import os, shutil, uuid, traceback, numpy as np
+import os, traceback, numpy as np
 from geometry_tools import generate_grid_info, map_zones_to_grid
 from mf6_wrapper import MF6Builder, BASE_DIR
 from post_process import process_results, process_pathlines
+from run_workspace import cleanup_run_workspace, create_run_workspace
 
 
 def run_simulation(params, boundary_coords, custom_boundaries=[], geo_model=None, wells=[], k_cells=[], rch_data=[],
-                   evt_data=[], mp_start_cell=None, faults=None): # 新增 faults 参数
-    run_id = str(uuid.uuid4())[:8]
-    WORK_DIR = os.path.join(BASE_DIR, "workspace", run_id)
+                   evt_data=[], mp_start_cell=None, faults=None, keep_run_dir=None): # 新增 faults 参数
+    run_id, WORK_DIR = create_run_workspace(prefix="api-run", workspace_root=os.path.join(BASE_DIR, "workspace"))
     logs = []
-    os.makedirs(WORK_DIR, exist_ok=True)
+    success = False
     try:
         logs.append(f"🚀 Starting Simulation [{run_id}]...")
+        logs.append(f"📁 工作目录: {WORK_DIR}")
         grid = generate_grid_info(params, boundary_coords)
 
         if geo_model is None:
-            return None, "❌ 未提供有效的钻孔地层模型数据"
+            logs.append("❌ 未提供有效的钻孔地层模型数据")
+            return None, "\n".join(logs)
 
         logs.append("⏳ 正在进行三维地层插值与断层/尖灭拓扑计算...")
         # 传入断层数据 faults
@@ -109,11 +111,15 @@ def run_simulation(params, boundary_coords, custom_boundaries=[], geo_model=None
                 pathlines = process_pathlines(WORK_DIR, grid)
 
         points = process_results(WORK_DIR, nlay, grid['nrow'], grid['ncol'], idomain, top_arrays, bot_arrays, grid)
-        return {"points": points, "pathlines": pathlines}, "\n".join(logs)
+        return {"points": points, "pathlines": pathlines, "run_id": run_id, "work_dir": WORK_DIR}, "\n".join(logs)
     except Exception as e:
-        return None, f"❌ System Error: {str(e)}\n{traceback.format_exc()}"
+        logs.append(f"❌ System Error: {str(e)}")
+        logs.append(traceback.format_exc())
+        return None, "\n".join(logs)
     finally:
-        if os.path.exists(WORK_DIR): shutil.rmtree(WORK_DIR)
+        kept = cleanup_run_workspace(WORK_DIR, success=success, keep_success=keep_run_dir)
+        if kept:
+            logs.append(f"📁 运行文件已保留: {WORK_DIR}")
 
 
 def get_grid_geometry(params, boundary_coords, geo_model=None, faults=None): # 新增 faults 参数

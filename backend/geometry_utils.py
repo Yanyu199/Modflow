@@ -2,26 +2,39 @@ import geopandas as gpd
 import zipfile
 import os
 import tempfile
-import shutil
 from pathlib import Path
 from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString, Point
 
 
-# ==========================================
-# 1. 保留您原有的边界解析函数 (绝对不改动)
-# ==========================================
+def _safe_extract_zip(zip_file, target_dir):
+    target_path = Path(target_dir).resolve()
+    for member in zip_file.infolist():
+        member_path = (target_path / member.filename).resolve()
+        if target_path != member_path and target_path not in member_path.parents:
+            raise ValueError(f"ZIP 文件包含不安全路径: {member.filename}")
+    zip_file.extractall(target_dir)
+
+
+def _find_first_shapefile(tmpdir):
+    shp_files = sorted(
+        path for path in Path(tmpdir).rglob("*")
+        if path.is_file() and path.suffix.lower() == ".shp"
+    )
+    if not shp_files:
+        raise ValueError("ZIP 中未找到 .shp 文件，请确认 .shp/.shx/.dbf 等文件已一起打包")
+    return shp_files[0]
+
+
 def parse_shapefile_zip(file_obj):
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             zip_path = os.path.join(tmpdir, "shape.zip")
             file_obj.save(zip_path)
             with zipfile.ZipFile(zip_path) as z:
-                z.extractall(tmpdir)
+                _safe_extract_zip(z, tmpdir)
 
-            shp_files = list(Path(tmpdir).glob("*.shp"))
-            if not shp_files: raise ValueError("无 .shp 文件")
-
-            gdf = gpd.read_file(shp_files[0])
+            shp_file = _find_first_shapefile(tmpdir)
+            gdf = gpd.read_file(shp_file)
             if gdf.empty: raise ValueError("文件为空")
 
             geom = gdf.geometry.iloc[0]
@@ -41,6 +54,21 @@ def ensure_polygon(geom):
         coords = list(geom.coords)
         if coords[0] != coords[-1]: coords.append(coords[0])
         return Polygon(coords)
+    elif geom.geom_type == 'MultiLineString':
+        lines = list(geom.geoms)
+        if not lines:
+            raise ValueError("空 MultiLineString")
+        coords = []
+        for line in lines:
+            part = list(line.coords)
+            if coords and part and coords[-1] == part[0]:
+                coords.extend(part[1:])
+            else:
+                coords.extend(part)
+        if len(coords) < 3:
+            raise ValueError("MultiLineString 点数不足，无法构成面")
+        if coords[0] != coords[-1]: coords.append(coords[0])
+        return Polygon(coords)
     else:
         raise ValueError(f"不支持的几何类型: {geom.geom_type}")
 
@@ -57,12 +85,10 @@ def parse_zone_shapefile(file_obj):
             zip_path = os.path.join(tmpdir, "zone.zip")
             file_obj.save(zip_path)
             with zipfile.ZipFile(zip_path) as z:
-                z.extractall(tmpdir)
+                _safe_extract_zip(z, tmpdir)
 
-            shp_files = list(Path(tmpdir).glob("*.shp"))
-            if not shp_files: raise ValueError("无 .shp 文件")
-
-            gdf = gpd.read_file(shp_files[0])
+            shp_file = _find_first_shapefile(tmpdir)
+            gdf = gpd.read_file(shp_file)
 
             # 自动探测数值字段
             possible_cols = ['rate', 'RATE', 'value', 'VALUE', 'val', 'VAL', 'rch', 'evt', 'RCH', 'EVT']

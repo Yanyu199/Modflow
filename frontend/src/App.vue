@@ -2,6 +2,14 @@
   <div id="app">
     <div class="app-header">
       <span class="app-title">地下水模型模拟平台</span>
+
+      <div class="workflow-nav">
+        <el-radio-group v-model="activePage" size="small">
+          <el-radio-button label="geology">1 地质体建模</el-radio-button>
+          <el-radio-button label="flow">2 水动力场</el-radio-button>
+          <el-radio-button label="analysis">3 结果分析</el-radio-button>
+        </el-radio-group>
+      </div>
       
       <div class="header-tools">
         <el-button type="text" icon="el-icon-download" class="header-btn" @click="saveProject">
@@ -34,9 +42,9 @@
       </div>
 
       <div class="layer-left">
-        <el-card class="floating-card left-card-scroll" shadow="always" :body-style="{padding: '0px'}">
+        <el-card v-if="activePage === 'geology'" class="floating-card left-card-scroll" shadow="always" :body-style="{padding: '0px'}">
           <div class="step-header">
-            <span><i class="el-icon-map-location"></i> Step 1: 几何构建</span>
+            <span><i class="el-icon-map-location"></i> Step 1: 边界与断层</span>
           </div>
           
           <BoundaryMap 
@@ -52,7 +60,7 @@
           />
           
           <div class="step-divider">
-             <i class="el-icon-files"></i> Step 2: 地层结构
+             <i class="el-icon-files"></i> Step 2: 钻孔与地层
           </div>
           
           <LayerPanel 
@@ -60,10 +68,125 @@
             @preview-boreholes="onPreviewBoreholes"
           />
         </el-card>
+
+        <el-card v-if="activePage === 'flow'" class="floating-card left-card-scroll" shadow="always" :body-style="{padding: '0px'}">
+          <div class="step-header">
+            <span><i class="el-icon-folder-opened"></i> 地质体模型输入</span>
+          </div>
+
+          <div class="flow-intake-panel">
+            <el-alert
+              v-if="hasGeologyModel"
+              title="已加载地质体模型"
+              type="success"
+              :description="geologySummary"
+              show-icon
+              :closable="false"
+            ></el-alert>
+            <el-alert
+              v-else
+              title="请先完成地质体建模，或上传地质体模型 JSON"
+              type="warning"
+              show-icon
+              :closable="false"
+            ></el-alert>
+
+            <el-upload
+              action=""
+              :auto-upload="false"
+              :show-file-list="false"
+              :on-change="loadGeologyModel"
+              accept=".json"
+              class="mt-10"
+            >
+              <el-button size="small" type="primary" plain icon="el-icon-upload2" style="width: 100%;">
+                上传地质体模型
+              </el-button>
+            </el-upload>
+
+            <el-button size="small" type="text" icon="el-icon-back" class="full-text-btn" @click="activePage = 'geology'">
+              返回地质体建模
+            </el-button>
+          </div>
+
+          <div class="step-divider">
+             <i class="el-icon-map-location"></i> 网格与边界选择
+          </div>
+
+          <BoundaryMap
+            ref="mapRef"
+            @boundary-loaded="onBoundaryLoaded"
+            @faults-loaded="onFaultsLoaded"
+            @grid-clicked="onGridClicked"
+            @segment-selected="onSegmentSelected"
+            :configuredData="boundaryConfigs"
+            :wells="wells"
+            :kCells="kCells"
+            :faults="faults"
+          />
+        </el-card>
+
+        <el-card v-if="activePage === 'analysis'" class="floating-card left-card-scroll" shadow="always" :body-style="{padding: '0px'}">
+          <div class="step-header">
+            <span><i class="el-icon-pie-chart"></i> 结果状态</span>
+          </div>
+          <div class="flow-intake-panel">
+            <el-alert
+              v-if="resultPoints.length > 0"
+              title="已有水动力场结果"
+              :description="`当前结果单元数：${resultPoints.length}`"
+              type="success"
+              show-icon
+              :closable="false"
+            ></el-alert>
+            <el-alert
+              v-else
+              title="暂无计算结果"
+              description="请先在水动力场页面完成 MODFLOW 6 运行。"
+              type="info"
+              show-icon
+              :closable="false"
+            ></el-alert>
+
+            <el-button size="small" type="primary" plain class="mt-10" style="width: 100%;" @click="activePage = 'flow'">
+              进入水动力场设置
+            </el-button>
+          </div>
+
+          <div v-if="currentLogs" class="step-divider">
+             <i class="el-icon-document"></i> 最近运行日志
+          </div>
+          <div v-if="currentLogs" class="log-preview">{{ currentLogs }}</div>
+        </el-card>
       </div>
 
       <div class="layer-right">
+        <el-card v-if="activePage === 'geology'" class="floating-card scrollable-card" shadow="always" :body-style="{padding: '10px'}">
+          <div slot="header">
+            <span><i class="el-icon-s-grid"></i> 地质体网格与导出</span>
+          </div>
+
+          <GridSettings
+            :value="gridConfig"
+            @input="gridConfig = $event"
+            @preview="onPreviewGrid"
+          />
+
+          <div class="model-summary">
+            <div class="summary-title">当前地质体摘要</div>
+            <div class="summary-row"><span>边界点数</span><b>{{ boundary ? boundary.length : 0 }}</b></div>
+            <div class="summary-row"><span>断层条数</span><b>{{ faults.length }}</b></div>
+            <div class="summary-row"><span>钻孔数量</span><b>{{ boreholesData ? boreholesData.length : 0 }}</b></div>
+            <div class="summary-row"><span>地层层数</span><b>{{ gridConfig.n_layers || 1 }}</b></div>
+          </div>
+
+          <el-button type="success" plain size="small" style="width: 100%; margin-top: 12px;" @click="exportGeologyModel">
+            <i class="el-icon-download"></i> 导出地质体模型
+          </el-button>
+        </el-card>
+
         <ModelParametersPanel
+          v-if="activePage === 'flow'"
           :activeStep.sync="activeStep"
           :gridConfig.sync="gridConfig" 
           :wells="wells"
@@ -73,6 +196,9 @@
           :loading="loading"
           :resultPoints="resultPoints"
           :currentLogs="currentLogs"
+          panelTitle="水动力场参数与运行"
+          :showGridSettings="false"
+          :showAnalysis="false"
           @preview-grid="onPreviewGrid"
           @layer-changed="onLayerUpdate"
           @delete-attribute="handleAttributeDelete"
@@ -83,6 +209,14 @@
           @remove-boundary="onBoundaryConfigRemove"
           @run="handleRun"
         />
+
+        <el-card v-if="activePage === 'analysis'" class="floating-card scrollable-card" shadow="always" :body-style="{padding: '10px'}">
+          <div slot="header">
+            <span><i class="el-icon-pie-chart"></i> 结果分析</span>
+          </div>
+          <AnalysisPanel v-if="resultPoints.length > 0" :points="resultPoints" />
+          <el-empty v-else description="暂无结果，请先运行水动力场模型"></el-empty>
+        </el-card>
       </div>
     </div>
 
@@ -121,6 +255,8 @@ import BoundaryMap from './components/BoundaryMap.vue';
 import Result3DViewer from './components/Real3DViewer.vue';
 import ModelParametersPanel from './components/ModelParametersPanel.vue';
 import LayerPanel from './components/LayerPanel.vue'; 
+import GridSettings from './components/GridSettings.vue';
+import AnalysisPanel from './components/AnalysisPanel.vue';
 import axios from 'axios';
 
 export default {
@@ -129,10 +265,13 @@ export default {
     BoundaryMap, 
     Result3DViewer, 
     ModelParametersPanel,
-    LayerPanel 
+    LayerPanel,
+    GridSettings,
+    AnalysisPanel
   },
   data() {
     return {
+      activePage: 'geology',
       boundary: null, 
       faults: [], // 新增：保存断层数据
       resultPoints: [], 
@@ -152,6 +291,24 @@ export default {
       rawCsvContent: null,
       boreholesData: null
     };
+  },
+  computed: {
+    hasGeologyModel() {
+      return Boolean(this.rawCsvContent && this.layerMapping && Object.keys(this.layerMapping).length > 0);
+    },
+    geologySummary() {
+      const boundaryCount = this.boundary ? this.boundary.length : 0;
+      const boreholeCount = this.boreholesData ? this.boreholesData.length : 0;
+      return `边界点 ${boundaryCount}，钻孔 ${boreholeCount}，地层 ${this.gridConfig.n_layers || 1} 层，断层 ${this.faults.length} 条`;
+    }
+  },
+  watch: {
+    activePage() {
+      if (this.activePage === 'flow' && this.activeStep === '3') {
+        this.activeStep = '4';
+      }
+      this.syncVisibleMap();
+    }
   },
   methods: {
     getMapGridSize() {
@@ -183,6 +340,68 @@ export default {
       });
     },
 
+    downloadJsonFile(data, filename) {
+      const dataStr = JSON.stringify(data, null, 2);
+      const blob = new Blob([dataStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    },
+
+    buildGeologyModelPayload() {
+      return {
+        schema_version: 'geology_model_v1',
+        exported_at: new Date().toISOString(),
+        boundary: this.boundary,
+        faults: this.faults,
+        gridConfig: this.gridConfig,
+        layerMapping: this.layerMapping,
+        rawCsvContent: this.rawCsvContent,
+        boreholesData: this.boreholesData,
+        units: {
+          length: 'meters',
+          time: 'days'
+        }
+      };
+    },
+
+    exportGeologyModel() {
+      if (!this.rawCsvContent || !this.layerMapping || Object.keys(this.layerMapping).length === 0) {
+        this.$message.warning('请先导入并解析钻孔数据，再导出地质体模型');
+        return;
+      }
+      this.downloadJsonFile(
+        this.buildGeologyModelPayload(),
+        `geology_model_${new Date().toISOString().slice(0,10)}.json`
+      );
+      this.$message.success('地质体模型已导出');
+    },
+
+    async restoreBackendGeologyFromCsv() {
+      if (!this.rawCsvContent) return;
+      const blob = new Blob([this.rawCsvContent], { type: 'text/csv' });
+      const formData = new FormData();
+      formData.append('file', blob, 'recovered_boreholes.csv');
+      formData.append('project_id', 'default');
+      await axios.post('http://localhost:5000/upload-boreholes', formData);
+    },
+
+    syncVisibleMap() {
+      this.$nextTick(() => {
+        if (this.$refs.mapRef && this.boundary) {
+          this.$refs.mapRef.boundary = this.boundary;
+          this.$refs.mapRef.drawMap();
+          this.$refs.mapRef.previewGrid(this.getMapGridSize());
+        }
+        if (this.boreholesData && this.$refs.viewer3d) {
+          this.$refs.viewer3d.drawBoreholes(this.boreholesData);
+        }
+      });
+    },
+
     saveProject() {
       const projectData = {
         boundary: this.boundary,
@@ -198,16 +417,49 @@ export default {
         boreholesData: this.boreholesData
       };
       
-      const dataStr = JSON.stringify(projectData, null, 2);
-      const blob = new Blob([dataStr], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `project_${new Date().toISOString().slice(0,10)}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
+      this.downloadJsonFile(projectData, `project_${new Date().toISOString().slice(0,10)}.json`);
       this.$message.success("项目已保存到本地");
+    },
+
+    loadGeologyModel(file) {
+      if (!file || !file.raw) return;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const json = JSON.parse(e.target.result);
+          const model = json.schema_version === 'geology_model_v1' ? json : json.geologyModel || json;
+
+          this.boundary = model.boundary || null;
+          this.faults = model.faults || [];
+          if (model.gridConfig) this.gridConfig = model.gridConfig;
+          this.layerMapping = model.layerMapping || {};
+          this.rawCsvContent = model.rawCsvContent || null;
+          this.boreholesData = model.boreholesData || null;
+
+          this.boundaryConfigs = {};
+          this.wells = [];
+          this.kCells = [];
+          this.rchData = [];
+          this.evtData = [];
+          this.resultPoints = [];
+          this.currentLogs = '';
+          this.currentSegmentIdx = null;
+          this.activeStep = '4';
+
+          if (this.rawCsvContent) {
+            this.$message.info('正在恢复后端地质模型...');
+            await this.restoreBackendGeologyFromCsv();
+          }
+
+          this.syncVisibleMap();
+          if (this.rawCsvContent) await this.fetchGridPreview();
+          this.$message.success('地质体模型已加载，可以开始配置水动力场');
+        } catch (err) {
+          console.error(err);
+          this.$message.error('地质体模型文件解析失败，或后端地质模型恢复失败');
+        }
+      };
+      reader.readAsText(file.raw);
     },
 
     loadProject(file) {
@@ -236,28 +488,13 @@ export default {
 
           if (this.rawCsvContent) {
               this.$message.info("正在唤醒 3D 地质模型，请稍候...");
-              const blob = new Blob([this.rawCsvContent], { type: 'text/csv' });
-              const formData = new FormData();
-              formData.append('file', blob, 'recovered_boreholes.csv');
-              formData.append('project_id', 'default');
-              
-              await axios.post('http://localhost:5000/upload-boreholes', formData);
+              await this.restoreBackendGeologyFromCsv();
           }
 
           this.$message.success("项目加载成功！");
-          
-          this.$nextTick(() => {
-             if (this.$refs.mapRef && this.boundary) {
-                 this.$refs.mapRef.boundary = this.boundary;
-                 this.$refs.mapRef.drawMap();
-                 this.$refs.mapRef.previewGrid(this.getMapGridSize());
-             }
-             this.fetchGridPreview();
-             
-             if (this.boreholesData && this.$refs.viewer3d) {
-                 this.$refs.viewer3d.drawBoreholes(this.boreholesData);
-             }
-          });
+
+          this.syncVisibleMap();
+          this.fetchGridPreview();
         } catch (err) {
           console.error(err);
           this.$message.error("无法解析项目文件，或后端地质重建失败");
@@ -333,6 +570,7 @@ export default {
     },
 
     onGridClicked(data) {
+      if (this.activePage !== 'flow') return;
       const existingWell = this.wells.find(w => w.row === data.row && w.col === data.col);
       const existingK = this.kCells.find(k => k.row === data.row && k.col === data.col);
       this.tempCell = {
@@ -361,6 +599,7 @@ export default {
     },
 
     onSegmentSelected(data) { 
+        if (this.activePage !== 'flow') return;
         this.currentSegmentIdx = data.index; 
         this.activeStep = '5';
     },
@@ -467,6 +706,22 @@ body { margin: 0; padding: 0; overflow: hidden; font-family: "Helvetica Neue", H
 .header-tools { display: flex; align-items: center; }
 .header-btn { color: #e4e7ed !important; font-size: 14px; margin-left: 10px; }
 .header-btn:hover { color: #409EFF !important; }
+.app-title { flex: 0 0 auto; font-size: 16px; white-space: nowrap; }
+.workflow-nav { flex: 1 1 auto; min-width: 0; display: flex; justify-content: center; }
+.workflow-nav .el-radio-button__inner {
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(255,255,255,0.18);
+  color: #dce3ea;
+}
+.workflow-nav .el-radio-button__orig-radio:checked + .el-radio-button__inner {
+  background: #409EFF;
+  border-color: #409EFF;
+  color: #fff;
+  box-shadow: -1px 0 0 0 #409EFF;
+}
+.workflow-nav .el-radio-button:first-child .el-radio-button__inner {
+  border-left-color: rgba(255,255,255,0.18);
+}
 
 .main-layout { position: relative; width: 100vw; height: 100vh; overflow: hidden; background: #eef2f5; }
 .layer-3d { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
@@ -495,11 +750,61 @@ body { margin: 0; padding: 0; overflow: hidden; font-family: "Helvetica Neue", H
 }
 .layer-left .el-card, .layer-right .el-card { pointer-events: auto; }
 
+.scrollable-card { display: flex; flex-direction: column; height: 100%; max-height: 100%; overflow: hidden; }
+.scrollable-card .el-card__header { flex-shrink: 0; background: #fcfcfc; padding: 12px 15px; }
+.scrollable-card .el-card__body { flex-grow: 1; overflow-y: auto; padding: 0 !important; }
+
 .floating-card { 
   background: rgba(255, 255, 255, 0.95) !important; 
   backdrop-filter: blur(12px); 
   border-radius: 8px; 
   box-shadow: 0 8px 16px rgba(0,0,0,0.08) !important;
+}
+
+.flow-intake-panel { padding: 12px 15px; }
+.mt-10 { margin-top: 10px; }
+.full-text-btn { width: 100%; margin-top: 8px; text-align: left; }
+
+.model-summary {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #ebeef5;
+}
+.summary-title {
+  color: #303133;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #606266;
+  font-size: 12px;
+  line-height: 26px;
+}
+.summary-row b { color: #303133; font-weight: 600; }
+
+.log-preview {
+  margin: 12px 15px;
+  padding: 10px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #303133;
+  background: #f7f9fb;
+  border: 1px solid #e4e7ed;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+@media (max-width: 1200px) {
+  .layer-left { width: 360px; }
+  .layer-right { width: 360px; }
+  .workflow-nav .el-radio-button__inner { padding-left: 10px; padding-right: 10px; }
 }
 
 .center-tip { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 5; opacity: 0.9; }

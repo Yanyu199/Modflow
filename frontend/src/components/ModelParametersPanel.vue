@@ -1,12 +1,12 @@
 <template>
   <el-card class="floating-card scrollable-card" shadow="always" :body-style="{padding: '10px'}">
     <div slot="header">
-      <span><i class="el-icon-setting"></i> 模型参数与运行 (Step 3-7)</span>
+      <span><i class="el-icon-setting"></i> {{ panelTitle }}</span>
     </div>
     
     <el-collapse :value="activeStep" @input="val => $emit('update:activeStep', val)" accordion>
       
-      <el-collapse-item name="3">
+      <el-collapse-item v-if="showGridSettings" name="3">
         <template slot="title">
           <span class="step-title"><i class="el-icon-s-grid"></i> Step 3: 网格离散化设置</span>
         </template>
@@ -59,7 +59,7 @@
         />
       </el-collapse-item>
 
-      <el-collapse-item name="7" v-if="resultPoints.length > 0">
+      <el-collapse-item name="7" v-if="showAnalysis && resultPoints.length > 0">
         <template slot="title">
           <span class="step-title" style="color: #67C23A; font-weight: bold;">
             <i class="el-icon-pie-chart"></i> Step 7: 结果分析
@@ -100,7 +100,10 @@ export default {
     boundaryConfigs: { type: Object, default: () => ({}) },
     loading: { type: Boolean, default: false },
     resultPoints: { type: Array, default: () => [] },
-    currentLogs: { type: String, default: '' }
+    currentLogs: { type: String, default: '' },
+    panelTitle: { type: String, default: '模型参数与运行 (Step 3-7)' },
+    showGridSettings: { type: Boolean, default: true },
+    showAnalysis: { type: Boolean, default: true }
   }
 };
 </script>
