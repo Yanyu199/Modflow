@@ -1,5 +1,94 @@
 # Benchmarks
 
+## Persistent Run Manifest Benchmark
+
+Updated: 2026-07-13
+
+The formal benchmark now exercises the full persistent run path:
+
+```text
+ProjectStore
+-> GridModelStore fixture
+-> flow_model_v1
+-> Flow Model Checker
+-> RunService
+-> run_manifest_v1
+-> FloPy package writer
+-> MODFLOW 6 process
+-> listing/head/budget diagnostics
+-> Run API summary
+```
+
+Command:
+
+```powershell
+cd backend
+python -m pytest tests/test_run_api.py::test_run_api_creates_persistent_manifest_and_budget_report -vv
+```
+
+The model definition is the same 1-layer, 1-row, 5-column steady-flow benchmark:
+
+- `delr = 100 m`
+- `delc = 100 m`
+- `top = 10 m`
+- `bottom = 0 m`
+- `Kx = Ky = Kz = 1 m/day`
+- `icelltype = 0`
+- left CHD = 10 m
+- right CHD = 9 m
+- center WEL = -1 m3/day
+- initial head = 9.5 m
+
+Expected heads:
+
+```text
+[[[10.0, 9.7, 9.4, 9.2, 9.0]]]
+```
+
+Expected budget:
+
+```text
+CHD in  = 3.0 m3/day
+CHD out = 2.0 m3/day
+WEL out = 1.0 m3/day
+total in = 3.0 m3/day
+total out = 3.0 m3/day
+percent discrepancy = 0.0
+```
+
+Tolerances:
+
+```text
+head_abs_tol = 1e-8 m
+head_rel_tol = 1e-9
+budget_abs_tol = 1e-7 m3/day
+percent_discrepancy_tol = 1e-5
+```
+
+Run artifacts are retained under:
+
+```text
+backend/projects/<project_id>/runs/<run_id>/
+```
+
+Important files:
+
+- `run_manifest.json`
+- `input/mfsim.nam`
+- `input/mfsim.lst`
+- `input/gwf.dis`
+- `input/gwf.npf`
+- `input/gwf.chd`
+- `input/gwf.wel`
+- `input/gwf.oc`
+- `input/gwf.lst`
+- `input/gwf.hds`
+- `input/gwf.bud`
+- `logs/mf6_stdout.txt`
+- `logs/mf6_stderr.txt`
+
+Failure review starts with `run_manifest.json`, then `logs/mf6_stderr.txt`, `input/mfsim.lst`, `input/gwf.lst`, `input/gwf.hds`, and `input/gwf.bud`.
+
 本文记录当前项目的第一个可复核运行基准：单层稳定流 MODFLOW 6 模型。该基准不依赖 Flask 开发服务器，可通过 pytest 重复运行，并保留 MODFLOW 6 输入输出文件用于复核。
 
 ## MF6 Executable Configuration
@@ -246,7 +335,7 @@ Expected heads:
 
 The test checks package existence, normal termination, finite head values, CHD cell heads, maximum absolute and relative head errors, total inflow, total outflow, and MODFLOW percent discrepancy.
 
-The generated files are retained for this test by calling `FlowModelService.run(..., keep_run_dir=True)`. They are written under `backend/workspace/flow-<flow_model_id>-<run-id>/` and include:
+The generated files are retained by the RunService manifest store. They are written under `backend/projects/<project_id>/runs/<run_id>/input/` and include:
 
 - `mfsim.nam`
 - `sim.tdis`

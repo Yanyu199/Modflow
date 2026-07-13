@@ -1,3 +1,40 @@
+# 2026-07-13 Run Manifest v1 Update
+
+Current formal run path:
+
+```mermaid
+flowchart LR
+  Browser["Vue Analysis page"]
+  RunAPI["Flask Run API"]
+  RunService["RunService"]
+  RunStore["RunManifestStore"]
+  FlowStore["FlowModelStore"]
+  GridStore["GridModelStore"]
+  Checker["Flow Model Checker"]
+  Compiler["FloPy compiler"]
+  MF6["MODFLOW 6 process"]
+  Diagnostics["Listing/head/budget diagnostics"]
+  Manifest["run_manifest.json"]
+
+  Browser -->|create/list/detail/summary| RunAPI
+  RunAPI --> RunService
+  RunService --> FlowStore
+  RunService --> GridStore
+  RunService --> Checker
+  Checker --> Compiler
+  RunService --> RunStore
+  RunStore --> Manifest
+  Compiler -->|write input| RunStore
+  RunService -->|subprocess return code| MF6
+  MF6 -->|lst hds bud| RunStore
+  RunService --> Diagnostics
+  Diagnostics --> Manifest
+  Manifest --> RunAPI
+  RunAPI --> Browser
+```
+
+Run artifacts are project-owned and no longer use a shared fixed workspace for the formal steady-flow path. API responses expose logical run metadata and logical file names, not server absolute paths.
+
 # 2026-07-13 Flow Model v1 Update
 
 Current formal flow path:

@@ -24,6 +24,9 @@ from grid_model_service import GridModelService
 from grid_model_store import GridArtifactError
 from project_schema import ProjectValidationError
 from project_store import ProjectConflictError, ProjectNotFoundError, ProjectStore, validate_project_id
+from run_manifest_schema import RunManifestValidationError, validate_run_id
+from run_manifest_store import RunManifestNotFoundError
+from run_service import RunService
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_ZIP_BYTES
@@ -35,6 +38,7 @@ project_store = ProjectStore()
 geology_service = GeologyModelService(project_store)
 grid_service = GridModelService(project_store)
 flow_service = FlowModelService(project_store)
+run_service = RunService(project_store, flow_service=flow_service)
 
 
 def api_error(message, status=400, code="validation_error", details=None):
@@ -88,6 +92,14 @@ def flow_exception_response(exc):
     if isinstance(exc, FlowModelValidationError):
         return api_error("Flow model validation failed.", 400, "flow_model_validation_error", exc.diagnostics)
     return grid_exception_response(exc)
+
+
+def run_exception_response(exc):
+    if isinstance(exc, RunManifestNotFoundError):
+        return api_error("Run not found.", 404, "run_not_found")
+    if isinstance(exc, RunManifestValidationError):
+        return api_error("Run request is invalid.", 400, "run_validation_error")
+    return flow_exception_response(exc)
 
 
 def json_payload():
@@ -414,6 +426,67 @@ def rebuild_flow_model(project_id, flow_model_id):
         return flow_exception_response(e)
 
 
+@app.route('/projects/<project_id>/runs', methods=['POST'])
+def create_run(project_id):
+    try:
+        payload = json_payload()
+        flow_model_id = payload.get("flow_model_id")
+        if not flow_model_id:
+            return api_error("flow_model_id is required.", 400, "flow_model_id_required")
+        result = run_service.run(
+            project_id,
+            flow_model_id,
+            keep_artifacts=payload.get("keep_artifacts"),
+        )
+        status = 201 if result["success"] else 400
+        return jsonify({
+            "success": result["success"],
+            "run_id": result["run_id"],
+            "status": result["status"],
+            "run": result["run"],
+            "points": result.get("points", []),
+            "pathlines": result.get("pathlines", []),
+            "logs": result.get("logs", ""),
+            "diagnostic_outputs": result.get("diagnostic_outputs", []),
+            "checker": result.get("checker"),
+            "package_preview": result.get("package_preview"),
+            "error": (result.get("manifest") or {}).get("error"),
+        }), status
+    except Exception as e:
+        return run_exception_response(e)
+
+
+@app.route('/projects/<project_id>/runs', methods=['GET'])
+def list_runs(project_id):
+    try:
+        limit = request.args.get("limit", 20)
+        status = request.args.get("status")
+        runs = run_service.list_runs(project_id, limit=int(limit), status=status)
+        return jsonify({"success": True, "runs": runs})
+    except Exception as e:
+        return run_exception_response(e)
+
+
+@app.route('/projects/<project_id>/runs/<run_id>', methods=['GET'])
+def get_run(project_id, run_id):
+    try:
+        validate_run_id(run_id)
+        manifest = run_service.get_run(project_id, run_id)
+        return jsonify({"success": True, "run": manifest})
+    except Exception as e:
+        return run_exception_response(e)
+
+
+@app.route('/projects/<project_id>/runs/<run_id>/summary', methods=['GET'])
+def get_run_summary(project_id, run_id):
+    try:
+        validate_run_id(run_id)
+        summary = run_service.get_summary(project_id, run_id)
+        return jsonify({"success": True, "run": summary})
+    except Exception as e:
+        return run_exception_response(e)
+
+
 @app.route('/upload-boreholes', methods=['POST'])
 def upload_boreholes():
     try:
@@ -535,24 +608,29 @@ def run():
                     "flow_model_authoritative",
                     {"legacy_fields": supplied_legacy_fields},
                 )
-            res_data = flow_service.run(
+            res_data = run_service.run(
                 project_id,
                 flow_model_id,
-                keep_run_dir=data.get("keep_run_dir"),
+                keep_artifacts=data.get("keep_artifacts"),
             )
-            return jsonify({
-                "success": True,
+            response = {
+                "success": res_data["success"],
                 "points": res_data["points"],
                 "pathlines": res_data.get("pathlines", []),
                 "logs": res_data.get("logs", ""),
                 "run_id": res_data.get("run_id"),
-                "work_dir": res_data.get("work_dir") if res_data.get("retained") else None,
-                "retained": res_data.get("retained"),
+                "status": res_data.get("status"),
+                "run": res_data.get("run"),
                 "flow_model_id": res_data.get("flow_model_id"),
                 "grid_model_id": res_data.get("grid_model_id"),
                 "checker": res_data.get("checker"),
                 "package_preview": res_data.get("package_preview"),
-            })
+                "diagnostic_outputs": res_data.get("diagnostic_outputs", []),
+                "deprecated_run_model_entrypoint": True,
+            }
+            if not res_data["success"]:
+                response["error"] = (res_data.get("manifest") or {}).get("error")
+            return jsonify(response), 200 if res_data["success"] else 400
 
         if not data.get("allow_legacy_flow_model"):
             return api_error(

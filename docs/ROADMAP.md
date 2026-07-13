@@ -9,7 +9,7 @@ Phase 1 now has a first vertical slice for persistent single-period steady flow:
 - End-to-end benchmark through Project/Grid/Flow/Checker/Compiler/MF6.
 - Frontend Flow page path: select WEL/K/CHD cells, save/check Flow Model, then run.
 
-The next smallest vertical task is not another boundary package. It should be a `run_manifest_v1` and structured numerical acceptance report that records MF6 executable source, package summary, normal termination, iteration/convergence details, total inflow/outflow, percent discrepancy, retained artifact paths, and result checksums.
+`run_manifest_v1` and the first structured numerical acceptance report are now implemented for the formal steady-flow path. The next smallest vertical task should be one additional boundary package, preferably RIV, implemented end to end through schema, validation, FloPy package creation, package-budget diagnostics, UI wiring, and a small benchmark.
 
 # Roadmap
 

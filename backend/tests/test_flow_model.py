@@ -210,19 +210,23 @@ def test_run_model_requires_saved_flow_model_and_rejects_legacy_overrides(tmp_pa
     assert override.status_code == 400
     assert override.get_json()["code"] == "flow_model_authoritative"
 
-    def fake_run(project_id, flow_model_id, keep_run_dir=None):
+    def fake_run(project_id, flow_model_id, keep_artifacts=None):
         return {
+            "success": True,
+            "status": "completed",
             "points": [],
             "pathlines": [],
             "logs": "stub",
-            "retained": False,
+            "run": {"run_id": "run_1111111111111111", "status": "completed"},
+            "run_id": "run_1111111111111111",
             "flow_model_id": flow_model_id,
             "grid_model_id": grid_model["grid_model_id"],
             "checker": {"runnable": True},
             "package_preview": {"packages": []},
+            "diagnostic_outputs": [],
         }
 
-    monkeypatch.setattr(app_module.flow_service, "run", fake_run)
+    monkeypatch.setattr(app_module.run_service, "run", fake_run)
     response = client.post(
         "/run-model",
         json={
@@ -233,6 +237,8 @@ def test_run_model_requires_saved_flow_model_and_rejects_legacy_overrides(tmp_pa
     )
     assert response.status_code == 200
     assert response.get_json()["flow_model_id"] == flow_model["flow_model_id"]
+    assert response.get_json()["deprecated_run_model_entrypoint"] is True
+    assert "work_dir" not in response.get_data(as_text=True)
 
 
 @pytest.mark.integration
@@ -261,7 +267,8 @@ def test_persistent_flow_model_benchmark_runs_and_matches(tmp_path):
     flow_model = created["flow_model"]
 
     result = service.run(project["project_id"], flow_model["flow_model_id"], keep_run_dir=True)
-    work_dir = Path(result["work_dir"])
+    run_dir = Path(store.project_dir(project["project_id"])) / "runs" / result["run_id"]
+    work_dir = run_dir / "input"
     definition = benchmark_definition()
     heads = flopy.utils.HeadFile(str(work_dir / "gwf.hds")).get_data()
     expected = expected_heads(definition)
@@ -271,7 +278,8 @@ def test_persistent_flow_model_benchmark_runs_and_matches(tmp_path):
     percent_discrepancy = read_percent_discrepancy(work_dir / "gwf.lst")
 
     assert result["success"] is True
-    assert result["retained"] is True
+    assert result["status"] in {"completed", "completed_with_warnings"}
+    assert (run_dir / "run_manifest.json").exists()
     assert listing_indicates_normal_termination(work_dir / "mfsim.lst")
     for filename in (
         "mfsim.nam",

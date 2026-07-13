@@ -10,7 +10,7 @@
           <el-radio-button label="analysis">3 结果分析</el-radio-button>
         </el-radio-group>
       </div>
-      
+
       <div class="header-tools">
         <span class="project-context" :class="{ missing: !currentProject }">
           <i class="el-icon-collection-tag"></i>
@@ -36,13 +36,13 @@
         </el-upload>
       </div>
     </div>
-    
+
     <div class="main-layout">
-      
+
       <div class="layer-3d">
-        <Result3DViewer 
-          ref="viewer3d" 
-          :points="resultPoints" 
+        <Result3DViewer
+          ref="viewer3d"
+          :points="resultPoints"
           :layerMapping="layerMapping"
           :projectId="projectId"
           :gridModelId="activeGridModelId"
@@ -55,15 +55,15 @@
           <div class="step-header">
             <span><i class="el-icon-map-location"></i> Step 1: 边界与断层</span>
           </div>
-          
-          <BoundaryMap 
-            ref="mapRef" 
-            @boundary-loaded="onBoundaryLoaded" 
+
+          <BoundaryMap
+            ref="mapRef"
+            @boundary-loaded="onBoundaryLoaded"
             @faults-loaded="onFaultsLoaded"
-            @grid-clicked="onGridClicked" 
-            @segment-selected="onSegmentSelected" 
-            :configuredData="boundaryConfigs" 
-            :wells="wells" 
+            @grid-clicked="onGridClicked"
+            @segment-selected="onSegmentSelected"
+            :configuredData="boundaryConfigs"
+            :wells="wells"
             :kCells="kCells"
             :chdCells="chdCells"
             :faults="faults"
@@ -71,15 +71,15 @@
             :projectId="projectId"
             :projectCrs="currentProject ? currentProject.crs : null"
           />
-          
+
           <div class="step-divider">
              <i class="el-icon-files"></i> Step 2: 钻孔与地层
           </div>
-          
-          <LayerPanel 
+
+          <LayerPanel
             :projectId="projectId"
             :units="currentProject ? currentProject.units : null"
-            @model-ready="onModelReady" 
+            @model-ready="onModelReady"
             @preview-boreholes="onPreviewBoreholes"
           />
         </el-card>
@@ -181,6 +181,43 @@
             </el-button>
           </div>
 
+          <div v-if="currentRun" class="step-divider">
+             <i class="el-icon-data-analysis"></i> 最近运行
+          </div>
+          <div v-if="currentRun" class="run-summary-panel">
+            <div class="summary-row"><span>Run ID</span><b>{{ currentRun.run_id }}</b></div>
+            <div class="summary-row"><span>状态</span><b>{{ currentRun.status }}</b></div>
+            <div class="summary-row"><span>MF6</span><b>{{ currentRun.mf6 && currentRun.mf6.version ? currentRun.mf6.version : '-' }}</b></div>
+            <div class="summary-row"><span>Normal termination</span><b>{{ currentRun.mf6 ? currentRun.mf6.normal_termination : '-' }}</b></div>
+            <div class="summary-row"><span>Converged</span><b>{{ currentRun.convergence ? currentRun.convergence.converged : '-' }}</b></div>
+            <div v-if="currentRun.water_budget" class="summary-row"><span>Total in</span><b>{{ currentRun.water_budget.total_in }}</b></div>
+            <div v-if="currentRun.water_budget" class="summary-row"><span>Total out</span><b>{{ currentRun.water_budget.total_out }}</b></div>
+            <div v-if="currentRun.water_budget" class="summary-row"><span>Percent discrepancy</span><b>{{ currentRun.water_budget.percent_discrepancy }}</b></div>
+          </div>
+
+          <div class="step-divider">
+             <i class="el-icon-time"></i> 运行历史
+          </div>
+          <div class="run-history-panel">
+            <el-button size="mini" type="text" icon="el-icon-refresh" @click="loadRunHistory">刷新运行历史</el-button>
+            <el-table
+              v-if="runHistory.length > 0"
+              :data="runHistory"
+              size="mini"
+              class="run-history-table"
+              @row-click="selectRunSummary"
+            >
+              <el-table-column prop="run_id" label="Run" min-width="120"></el-table-column>
+              <el-table-column prop="status" label="状态" min-width="95"></el-table-column>
+              <el-table-column label="误差" min-width="70">
+                <template slot-scope="scope">
+                  {{ scope.row.water_budget ? scope.row.water_budget.percent_discrepancy : '-' }}
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无运行历史" :image-size="60"></el-empty>
+          </div>
+
           <div v-if="currentLogs" class="step-divider">
              <i class="el-icon-document"></i> 最近运行日志
           </div>
@@ -234,7 +271,7 @@
         <ModelParametersPanel
           v-if="activePage === 'flow'"
           :activeStep.sync="activeStep"
-          :gridConfig.sync="gridConfig" 
+          :gridConfig.sync="gridConfig"
           :wells="wells"
           :kCells="kCells"
           :chdCells="chdCells"
@@ -318,7 +355,7 @@
 import BoundaryMap from './components/BoundaryMap.vue';
 import Result3DViewer from './components/Real3DViewer.vue';
 import ModelParametersPanel from './components/ModelParametersPanel.vue';
-import LayerPanel from './components/LayerPanel.vue'; 
+import LayerPanel from './components/LayerPanel.vue';
 import GridSettings from './components/GridSettings.vue';
 import AnalysisPanel from './components/AnalysisPanel.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
@@ -326,9 +363,9 @@ import axios from 'axios';
 
 export default {
   name: 'App',
-  components: { 
-    BoundaryMap, 
-    Result3DViewer, 
+  components: {
+    BoundaryMap,
+    Result3DViewer,
     ModelParametersPanel,
     LayerPanel,
     GridSettings,
@@ -347,9 +384,9 @@ export default {
       projectSubmitting: false,
       pendingLegacyProjectState: null,
       activePage: 'geology',
-      boundary: null, 
+      boundary: null,
       faults: [], // 新增：保存断层数据
-      resultPoints: [], 
+      resultPoints: [],
       layerMapping: {},
       loading: false,
       gridConfig: {
@@ -363,10 +400,10 @@ export default {
         minimum_thickness: 0.1,
         minimum_boundary_overlap: 0.1
       },
-      currentSegmentIdx: null, 
-      boundaryConfigs: {}, 
-      wells: [], 
-      kCells: [], 
+      currentSegmentIdx: null,
+      boundaryConfigs: {},
+      wells: [],
+      kCells: [],
       chdCells: [],
       currentFlowModel: null,
       flowCheck: null,
@@ -378,12 +415,14 @@ export default {
         kz_default: 1.0,
         icelltype: 0
       },
-      dialogVisible: false, 
+      dialogVisible: false,
       tempCell: null,
-      rchData: [], 
+      rchData: [],
       evtData: [],
       activeStep: '3',
       currentLogs: '',
+      currentRun: null,
+      runHistory: [],
       rawCsvContent: null,
       boreholesData: null
     };
@@ -404,6 +443,7 @@ export default {
         || this.chdCells.length > 0
         || Object.keys(this.boundaryConfigs).length > 0
         || this.resultPoints.length > 0
+        || this.currentRun
       );
     },
     projectContextLabel() {
@@ -458,6 +498,9 @@ export default {
     activePage() {
       if (this.activePage === 'flow' && this.activeStep === '3') {
         this.activeStep = '4';
+      }
+      if (this.activePage === 'analysis') {
+        this.loadRunHistory();
       }
       this.syncVisibleMap();
     },
@@ -586,7 +629,10 @@ export default {
       this.gridQuality = {};
       this.gridRenderCells = [];
       this.activeGridModelId = null;
-      if (clearPoints) this.resultPoints = [];
+      if (clearPoints) {
+        this.resultPoints = [];
+        this.currentRun = null;
+      }
       this.invalidateFlowModel();
     },
     buildGridApiConfig() {
@@ -678,6 +724,7 @@ export default {
 
       this.resultPoints = [];
       this.currentLogs = '';
+      this.currentRun = null;
       this.activeStep = '3';
 
       if (options.restoreBackend && this.rawCsvContent) {
@@ -709,7 +756,8 @@ export default {
     },
 
     onPreviewBoreholes(data) {
-      this.resultPoints = []; 
+      this.resultPoints = [];
+      this.currentRun = null;
       this.$nextTick(() => {
         if (this.$refs.viewer3d && data.boreholes) {
           this.$refs.viewer3d.drawBoreholes(data.boreholes);
@@ -792,7 +840,7 @@ export default {
           activeGridModelId: this.activeGridModelId
         }
       };
-      
+
       this.downloadJsonFile(projectData, `project_${new Date().toISOString().slice(0,10)}.json`);
       this.$message.success("项目已保存到本地");
     },
@@ -818,6 +866,7 @@ export default {
             this.evtData = [];
             this.resultPoints = [];
             this.currentLogs = '';
+            this.currentRun = null;
             this.currentSegmentIdx = null;
             this.activeStep = '4';
             this.syncVisibleMap();
@@ -848,6 +897,7 @@ export default {
           this.evtData = [];
           this.resultPoints = [];
           this.currentLogs = '';
+          this.currentRun = null;
           this.currentSegmentIdx = null;
           this.activeStep = '4';
 
@@ -872,7 +922,7 @@ export default {
     loadProject(file) {
       if (!file || !file.raw) return;
       const reader = new FileReader();
-      
+
       reader.onload = async (e) => {
         try {
           const json = JSON.parse(e.target.result);
@@ -922,12 +972,12 @@ export default {
       reader.readAsText(file.raw);
     },
 
-    onBoundaryLoaded(data) { 
+    onBoundaryLoaded(data) {
         const payload = Array.isArray(data) ? { coords: data } : (data || {});
         this.boundary = payload.coords || [];
         if (payload.geology_model) this.applyNormalizedGeologyModel(payload.geology_model);
         else this.clearGridModelState();
-        this.wells = []; this.kCells = []; this.chdCells = []; this.resultPoints = [];
+        this.wells = []; this.kCells = []; this.chdCells = []; this.resultPoints = []; this.currentRun = null;
         this.invalidateFlowModel();
         this.$message.success("边界加载成功");
     },
@@ -944,7 +994,7 @@ export default {
             this.fetchGridPreview();
         }
     },
-    
+
     async onPreviewGrid(payload) {
       if (!this.ensureProjectContext('预览网格')) return;
       this.gridConfig = { ...this.gridConfig, ...((payload && payload.config) || {}) };
@@ -980,7 +1030,7 @@ export default {
         if (res.data.success) {
           this.applyGridModel(res.data.grid_model);
           await this.loadGridRenderData(res.data.grid_model_id);
-          
+
           this.$nextTick(() => {
             if (this.boreholesData && this.$refs.viewer3d && this.$refs.viewer3d.drawBoreholes) {
               this.$refs.viewer3d.drawBoreholes(this.boreholesData);
@@ -1062,14 +1112,14 @@ export default {
       this.dialogVisible = false;
     },
 
-    onSegmentSelected(data) { 
+    onSegmentSelected(data) {
         if (this.activePage !== 'flow') return;
-        this.currentSegmentIdx = data.index; 
+        this.currentSegmentIdx = data.index;
         this.activeStep = '5';
     },
     onBoundaryConfigSave(cfg) { this.$set(this.boundaryConfigs, cfg.id, cfg); },
     onBoundaryConfigRemove(id) { this.$delete(this.boundaryConfigs, id); },
-    
+
     handleAttributeDelete(target) {
       if (target.type === 'well') this.wells = this.wells.filter(w => !this.isSameGridCell(w, target));
       else if (target.type === 'k_cell') this.kCells = this.kCells.filter(k => !this.isSameGridCell(k, target));
@@ -1229,6 +1279,50 @@ export default {
       }
     },
 
+    async loadRunHistory() {
+      if (!this.projectId) return;
+      try {
+        const res = await axios.get(`http://localhost:5000/projects/${this.projectId}/runs?limit=10`);
+        if (res.data.success) {
+          this.runHistory = res.data.runs || [];
+          if (!this.currentRun && this.runHistory.length > 0) {
+            this.currentRun = this.runHistory[0];
+          }
+        }
+      } catch (err) {
+        this.$message.warning('运行历史读取失败: ' + (err.response?.data?.error || err.message));
+      }
+    },
+
+    async selectRunSummary(row) {
+      if (!row || !row.run_id || !this.projectId) return;
+      try {
+        const res = await axios.get(`http://localhost:5000/projects/${this.projectId}/runs/${row.run_id}/summary`);
+        if (res.data.success) {
+          this.currentRun = res.data.run;
+          this.currentLogs = this.formatRunSummary(this.currentRun);
+        }
+      } catch (err) {
+        this.$message.warning('运行详情读取失败: ' + (err.response?.data?.error || err.message));
+      }
+    },
+
+    formatRunSummary(run) {
+      if (!run) return '';
+      const budget = run.water_budget || {};
+      const error = run.error ? `${run.error.code}: ${run.error.message}` : '';
+      return [
+        `Run: ${run.run_id}`,
+        `Status: ${run.status}`,
+        `MF6 return code: ${run.mf6 ? run.mf6.return_code : '-'}`,
+        `Normal termination: ${run.mf6 ? run.mf6.normal_termination : '-'}`,
+        `Converged: ${run.convergence ? run.convergence.converged : '-'}`,
+        `Water budget in/out: ${budget.total_in} / ${budget.total_out}`,
+        `Percent discrepancy: ${budget.percent_discrepancy}`,
+        error
+      ].filter(Boolean).join('\n');
+    },
+
     async handleRun(partialParams, mpCell = null) {
       if (!this.ensureProjectContext('运行模型')) return;
       if (!this.activeGridModelId) {
@@ -1241,47 +1335,56 @@ export default {
       }
       this.loading = true;
       this.currentLogs = '';
-      
+
       try {
         const flowModel = await this.saveFlowModelToBackend(partialParams);
         if (!flowModel) return;
-        const res = await axios.post('http://localhost:5000/run-model', {
-          project_id: this.projectId, 
-          grid_model_id: this.activeGridModelId,
-          flow_model_id: flowModel.flow_model_id,
-          mp_start_cell: mpCell
+        if (mpCell) {
+          this.$message.info('当前正式 Run API 尚未接入 MODPATH，先执行地下水流场运行');
+        }
+        const res = await axios.post(`http://localhost:5000/projects/${this.projectId}/runs`, {
+          flow_model_id: flowModel.flow_model_id
         });
-        
-        if (res.data.success) { 
-            this.resultPoints = res.data.points; 
-            this.currentLogs = res.data.logs || '';
-            this.$message.success(mpCell ? '流线追踪计算完成' : '模拟计算完成'); 
+
+        this.currentRun = res.data.run || null;
+        this.currentLogs = res.data.logs || this.formatRunSummary(this.currentRun);
+        await this.loadRunHistory();
+        if (res.data.success && ['completed', 'completed_with_warnings'].includes(res.data.status)) {
+            this.resultPoints = res.data.points || [];
+            this.$message.success(res.data.status === 'completed_with_warnings' ? '模拟完成，但存在警告' : '模拟计算完成');
             this.activeStep = '7';
-            
+
             if (res.data.pathlines && res.data.pathlines.length > 0) {
               const xs = this.boundary.map(p => p.x);
               const ys = this.boundary.map(p => p.y);
               const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
               const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-              
+
               this.$nextTick(() => {
                 if (this.$refs.viewer3d) {
                   this.$refs.viewer3d.drawPathLines(
-                    res.data.pathlines, 
-                    cx, 
-                    cy, 
+                    res.data.pathlines,
+                    cx,
+                    cy,
                     this.$refs.viewer3d.zScale
                   );
                 }
               });
             }
         } else {
-            if (res.data.logs) this.currentLogs = res.data.logs;
-            this.$message.error('模拟失败，请查看日志');
+            const errorCode = res.data.error && res.data.error.code ? res.data.error.code : res.data.status;
+            this.$message.error(`模拟失败：${errorCode}`);
         }
-      } catch (err) { 
-          this.$message.error('错误: ' + (err.response?.data?.error || err.message)); 
-      } 
+      } catch (err) {
+          const data = err.response && err.response.data ? err.response.data : null;
+          if (data && data.run) {
+            this.currentRun = data.run;
+            this.currentLogs = data.logs || this.formatRunSummary(data.run);
+            await this.loadRunHistory();
+          }
+          const errorCode = data && data.error && data.error.code ? data.error.code : (data && data.code ? data.code : err.message);
+          this.$message.error('错误: ' + errorCode);
+      }
       finally { this.loading = false; }
     }
   }
@@ -1291,11 +1394,11 @@ export default {
 <style>
 body { margin: 0; padding: 0; overflow: hidden; font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "微软雅黑", Arial, sans-serif; }
 
-.app-header { 
-  position: absolute; top: 0; left: 0; width: 100%; height: 50px; 
-  background: linear-gradient(90deg, #2b303b, #434a56); 
+.app-header {
+  position: absolute; top: 0; left: 0; width: 100%; height: 50px;
+  background: linear-gradient(90deg, #2b303b, #434a56);
   color: white; line-height: 50px; padding: 0 20px;
-  font-weight: 500; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.25); 
+  font-weight: 500; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.25);
   display: flex; justify-content: space-between; align-items: center;
 }
 
@@ -1342,26 +1445,26 @@ body { margin: 0; padding: 0; overflow: hidden; font-family: "Helvetica Neue", H
 .main-layout { position: relative; width: 100vw; height: 100vh; overflow: hidden; background: #eef2f5; }
 .layer-3d { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
 
-.layer-left { 
-  position: absolute; top: 65px; left: 20px; bottom: 20px; width: 420px; z-index: 10; 
-  display: flex; flex-direction: column; pointer-events: none; 
+.layer-left {
+  position: absolute; top: 65px; left: 20px; bottom: 20px; width: 420px; z-index: 10;
+  display: flex; flex-direction: column; pointer-events: none;
 }
 .left-card-scroll { display: flex; flex-direction: column; height: 100%; overflow: hidden; border: none; }
 .left-card-scroll .el-card__body { flex-grow: 1; overflow-y: auto; padding: 0; }
 
 .step-header {
-  background: #f5f7fa; padding: 12px 15px; font-size: 14px; font-weight: bold; 
+  background: #f5f7fa; padding: 12px 15px; font-size: 14px; font-weight: bold;
   color: #303133; border-bottom: 1px solid #e4e7ed;
 }
 
 .step-divider {
-  background: #fdfdfd; padding: 12px 15px; font-size: 14px; font-weight: bold; 
+  background: #fdfdfd; padding: 12px 15px; font-size: 14px; font-weight: bold;
   color: #303133; border-top: 1px solid #ebeef5; border-bottom: 1px solid #ebeef5;
   box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
 }
 
-.layer-right { 
-  position: absolute; top: 65px; right: 20px; bottom: 20px; width: 400px; z-index: 10; 
+.layer-right {
+  position: absolute; top: 65px; right: 20px; bottom: 20px; width: 400px; z-index: 10;
   display: flex; flex-direction: column; pointer-events: none;
 }
 .layer-left .el-card, .layer-right .el-card { pointer-events: auto; }
@@ -1370,10 +1473,10 @@ body { margin: 0; padding: 0; overflow: hidden; font-family: "Helvetica Neue", H
 .scrollable-card .el-card__header { flex-shrink: 0; background: #fcfcfc; padding: 12px 15px; }
 .scrollable-card .el-card__body { flex-grow: 1; overflow-y: auto; padding: 0 !important; }
 
-.floating-card { 
-  background: rgba(255, 255, 255, 0.95) !important; 
-  backdrop-filter: blur(12px); 
-  border-radius: 8px; 
+.floating-card {
+  background: rgba(255, 255, 255, 0.95) !important;
+  backdrop-filter: blur(12px);
+  border-radius: 8px;
   box-shadow: 0 8px 16px rgba(0,0,0,0.08) !important;
 }
 
@@ -1415,6 +1518,21 @@ body { margin: 0; padding: 0; overflow: hidden; font-family: "Helvetica Neue", H
   border-radius: 6px;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.run-summary-panel,
+.run-history-panel {
+  margin: 12px 15px;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+}
+
+.run-history-table {
+  margin-top: 6px;
+  width: 100%;
+  font-size: 12px;
 }
 
 @media (max-width: 1200px) {

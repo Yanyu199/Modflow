@@ -28,9 +28,7 @@ from flow_model_store import FlowModelStore
 from grid_model_schema import parse_cell_id
 from grid_model_store import GridArtifactError, GridModelStore
 from mf6_executable import resolve_mf6_executable
-from post_process import process_results
 from project_store import ProjectStore, ProjectNotFoundError
-from run_workspace import cleanup_run_workspace, create_run_workspace
 
 
 class FlowModelService:
@@ -152,70 +150,13 @@ class FlowModelService:
         }
 
     def run(self, project_id: str, flow_model_id: str, *, keep_run_dir: Optional[bool] = None) -> Dict[str, Any]:
-        project = self.project_store.get(project_id)
-        flow_model = self.flow_store.get_active(project)
-        if flow_model["flow_model_id"] != flow_model_id:
-            raise FlowModelNotFoundError("flow_model_id is not the active flow model")
-        project, grid_manifest, arrays = self._load_project_grid(project_id, flow_model["grid_model_id"])
-        if flow_model.get("status") == "stale":
-            diagnostics = empty_diagnostics()
-            add_diagnostic(
-                diagnostics,
-                "error",
-                "FLOW_MODEL_STALE",
-                "Flow model is stale because its grid or upstream model changed. Re-check and save it before running.",
-                "status",
-            )
-            raise FlowModelValidationError("flow model is stale", diagnostics)
-        diagnostics, materialized = self._check_document(project, grid_manifest, arrays, flow_model)
-        if has_errors(diagnostics):
-            raise FlowModelValidationError("flow model checker found blocking errors", diagnostics)
+        from run_service import RunService
 
-        run_id, work_dir = create_run_workspace(prefix=f"flow-{flow_model_id}")
-        success = False
-        retained = True
-        try:
-            compiled = self.compile_to_simulation(project_id, flow_model_id, work_dir)
-            sim = compiled["simulation"]
-            sim.write_simulation()
-            success, buff = sim.run_simulation(silent=True)
-            if not success:
-                raise RuntimeError("MODFLOW 6 run failed: " + "\n".join(buff[-20:]))
-            grid_info = self._grid_info(grid_manifest, arrays)
-            points = process_results(
-                work_dir,
-                grid_info["nlay"],
-                grid_info["nrow"],
-                grid_info["ncol"],
-                grid_info["idomain"],
-                grid_info["top"],
-                grid_info["botm"],
-                grid_info,
-            )
-            result = {
-                "points": points,
-                "pathlines": [],
-                "logs": "MODFLOW 6 run completed through flow_model_v1.",
-            }
-            result.update(
-                {
-                    "success": True,
-                    "run_id": run_id,
-                    "work_dir": work_dir,
-                    "retained": True,
-                    "flow_model_id": flow_model_id,
-                    "grid_model_id": grid_manifest["grid_model_id"],
-                    "checker": self._checker_response(diagnostics, materialized),
-                    "package_preview": self._package_summary(flow_model, materialized),
-                    "mf6_stdout": buff,
-                }
-            )
-            success = True
-            return result
-        finally:
-            retained = cleanup_run_workspace(work_dir, success=success, keep_success=keep_run_dir)
-            if "result" in locals():
-                result["retained"] = retained
+        return RunService(self.project_store, flow_service=self).run(
+            project_id,
+            flow_model_id,
+            keep_artifacts=True if keep_run_dir is None else bool(keep_run_dir),
+        )
 
     def _load_project_grid(self, project_id: str, grid_model_id: str):
         project = self.project_store.get(project_id)

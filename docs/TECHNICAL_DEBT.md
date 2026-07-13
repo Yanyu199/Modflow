@@ -9,8 +9,8 @@ Resolved or reduced:
 
 Remaining high-priority debt:
 
-- No `run_manifest_v1` or persistent run history yet.
-- Main application run responses still do not provide a structured water-balance/convergence report.
+- `run_manifest_v1` and persistent run history now exist for the formal steady-flow path only.
+- Main application formal run responses now provide structured convergence, water-budget, package-budget, and output-registry summaries.
 - RIV, DRN, GHB, RCH, and EVT are not part of the formal Flow Model.
 - MODPATH executable configuration is still out of scope for this update.
 - The legacy `/run-model` adapter remains behind `allow_legacy_flow_model=true` and should be removed after remaining packages are migrated.

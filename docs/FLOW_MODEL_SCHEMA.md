@@ -10,7 +10,7 @@ This document describes the first persistent steady-flow model contract implemen
 - Geology Model: boundary, boreholes, stratigraphy, faults, interpolation inputs, and geology provenance.
 - Grid Model: backend-authoritative structured DIS grid, `top`, `botm`, `idomain`, `delr`, `delc`, and stable `cell_id`.
 - Flow Model: IC, NPF, CHD, WEL, IMS, OC, checker diagnostics, and package preview.
-- Run: one execution of a checked flow model. A formal run manifest is still a future task.
+- Run: one execution of a checked flow model, persisted as `run_manifest_v1` with input/output artifacts, convergence diagnostics, water budget, and package budget.
 
 ## Storage
 
@@ -20,7 +20,7 @@ The active flow model is saved at:
 backend/projects/<project_id>/flow/flow_model.json
 ```
 
-The flow model does not copy Grid Model arrays and does not save MODFLOW result files. It references the active Grid Model by `grid_model_id` and uses Grid Store arrays at compile time.
+The flow model does not copy Grid Model arrays and does not save MODFLOW result files. It references the active Grid Model by `grid_model_id` and uses Grid Store arrays at compile time. Run results are saved under `backend/projects/<project_id>/runs/<run_id>/`.
 
 ## Identifier
 
@@ -195,6 +195,10 @@ PUT  /projects/<project_id>/flow-models/<flow_model_id>
 POST /projects/<project_id>/flow-models/<flow_model_id>/check
 GET  /projects/<project_id>/flow-models/<flow_model_id>/package-preview
 POST /projects/<project_id>/flow-models/<flow_model_id>/rebuild
+POST /projects/<project_id>/runs
+GET  /projects/<project_id>/runs
+GET  /projects/<project_id>/runs/<run_id>
+GET  /projects/<project_id>/runs/<run_id>/summary
 ```
 
 Normal run request:
@@ -207,7 +211,7 @@ Normal run request:
 }
 ```
 
-The legacy `/run-model` body remains only behind `allow_legacy_flow_model=true` and returns a deprecation warning.
+The legacy `/run-model` body remains only behind `allow_legacy_flow_model=true` and returns a deprecation warning. When a formal `flow_model_id` is supplied, `/run-model` delegates to the Run API path and returns a `run_manifest_v1` summary without exposing `work_dir`.
 
 ## Benchmark
 

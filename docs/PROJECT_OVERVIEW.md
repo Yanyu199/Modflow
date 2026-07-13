@@ -1,3 +1,9 @@
+# 2026-07-13 Run Manifest v1 Update
+
+The project now has the first persistent run record for the formal steady-flow path. `run_manifest_v1` stores one MODFLOW 6 execution under `backend/projects/<project_id>/runs/<run_id>/`, including input files, listing files, head/budget outputs, stdout/stderr logs, MF6 executable metadata, model snapshots, convergence diagnostics, water budget, package budget, and output registry.
+
+The normal run flow now has project-level run history endpoints and the frontend analysis page can show the latest run summary and recent runs. The deprecated `/run-model` formal path delegates to the same RunService path when a `flow_model_id` is supplied.
+
 # 2026-07-13 Flow Model v1 Update
 
 The project now has a first persistent `flow_model_v1` for the steady-flow workflow. The formal Flow Model path covers IC, NPF, CHD, WEL, IMS, and OC, stores the active model at `backend/projects/<project_id>/flow/flow_model.json`, and updates `project.references.flow_model_id`.
@@ -6,7 +12,7 @@ The normal `/run-model` request now uses `project_id`, `grid_model_id`, and `flo
 
 The frontend Flow page now supports selecting WEL, K, and CHD cells, saving/checking the Flow Model, previewing package summary, and enabling run only after the checker reports the model is runnable.
 
-Still not implemented in the formal Flow Model: RIV, DRN, GHB, RCH, EVT, STO, transient flow, MODPATH, GWT, run manifest, and run history.
+Still not implemented in the formal Flow Model: RIV, DRN, GHB, RCH, EVT, STO, transient flow, MODPATH, and GWT. Run manifest and basic run history are implemented for the first steady-flow scope.
 
 # Project Overview
 

@@ -1,3 +1,13 @@
+# 2026-07-13 Run Manifest v1 Update
+
+| Capability | Current status after this update | Classification |
+|---|---|---|
+| Run manifest/history | `run_manifest_v1` is stored under `backend/projects/<project_id>/runs/<run_id>/` with snapshots, status, MF6 metadata, convergence diagnostics, water budget, package budget, output registry, and logs. | Implemented for first steady-flow scope |
+| Run API | `POST/GET /projects/<project_id>/runs...` creates runs, lists history, returns full details, and returns compact summaries. | Implemented for first steady-flow scope |
+| Numerical acceptance | The formal run benchmark checks MF6 return code, normal termination, convergence, `.hds`, `.bud`, expected heads, total inflow/outflow, percent discrepancy, CHD budget, and WEL budget. | Implemented for first steady-flow benchmark |
+| Frontend run history | The analysis page shows latest run diagnostics and recent run history. | Partially implemented |
+| Advanced result review | Download/export of run artifacts, background queueing, WebSocket progress, and multi-run comparison are not implemented. | Not implemented |
+
 # 2026-07-13 Flow Model v1 Update
 
 The first formal steady-flow Flow Model is now partially implemented and should be treated as the authoritative path for IC, NPF, CHD, WEL, IMS, and OC in the normal frontend workflow.
@@ -13,7 +23,7 @@ The first formal steady-flow Flow Model is now partially implemented and should 
 | Package Preview | Returns package list and CHD/WEL/K summary without server absolute paths or large arrays. | Implemented for first steady-flow scope |
 | `/run-model` formal path | Uses `project_id + grid_model_id + flow_model_id`; rejects legacy overrides when a Flow Model is supplied. | Implemented for first steady-flow scope |
 | RIV/DRN/GHB/RCH/EVT | Not migrated into `flow_model_v1`; legacy UI/backend code remains out of formal run path. | Not implemented in formal Flow Model |
-| Run manifest/history | Still absent. | Not implemented |
+| Run manifest/history | Implemented as `run_manifest_v1` for the first steady-flow scope. | Implemented for first steady-flow scope |
 
 # GMS Capability Matrix
 
