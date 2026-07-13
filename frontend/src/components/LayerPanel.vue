@@ -73,9 +73,8 @@
 
 <script setup>
 import { ref } from 'vue';
-import axios from 'axios';
+import { uploadBoreholes as uploadBoreholesFile } from '../api/geologyModels';
 
-const API_BASE_URL = 'http://localhost:5000'; 
 const props = defineProps({
   projectId: { type: String, default: null },
   units: { type: Object, default: null }
@@ -113,9 +112,7 @@ const uploadBoreholes = async () => {
     errorMessage.value = '';
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/upload-boreholes`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
+      const response = await uploadBoreholesFile(formData);
       if (response.data.success) {
         uploadResult.value = response.data;
         // 把后端的返回值和纯文本 csvContent 一起发给 App.vue

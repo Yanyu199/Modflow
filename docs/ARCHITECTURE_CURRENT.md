@@ -1,3 +1,32 @@
+# 2026-07-13 Stability And Scalable Runtime Update
+
+Current formal runtime path:
+
+```mermaid
+flowchart LR
+  Browser["Vue API/store/view layers"]
+  RunAPI["Async Run API"]
+  ResultAPI["Result Slice API"]
+  Executor["LocalProcessRunExecutor"]
+  Worker["Worker process"]
+  MF6["MODFLOW 6 executable"]
+  Manifest["run_manifest v1.1"]
+  Artifacts["lst/hds/bud/input packages"]
+
+  Browser --> RunAPI
+  RunAPI --> Executor
+  Executor --> Worker
+  Worker --> MF6
+  Worker --> Manifest
+  MF6 --> Artifacts
+  Browser --> ResultAPI
+  ResultAPI --> Artifacts
+```
+
+The formal run API no longer waits for MF6 in the HTTP request thread. Results
+are read by variable/layer/time/range through the Result API. Large arrays should
+not be returned as full JSON payloads or stored in deep Vue state.
+
 # 2026-07-13 RIV Boundary v1 Update
 
 Current formal RIV path:

@@ -2,6 +2,22 @@
 
 Updated: 2026-07-13
 
+## 2026-07-13 Async Runtime Update
+
+Current schema version is `1.1`. Version `1.0` manifests are migrated by adding
+an `executor` object. New statuses are:
+
+- `queued`
+- `starting`
+- `cancel_requested`
+- `cancelled`
+- `timed_out`
+- `interrupted`
+
+The `executor` object records local executor type, idempotency key, worker PID,
+MF6 PID, timeout seconds, cancellation metadata, and resource estimates. Formal
+run creation now returns `202` and does not wait for MF6 to finish.
+
 ## 2026-07-13 RIV Budget Update
 
 The run manifest now registers RIV artifacts and package-budget totals when a saved Flow Model contains RIV records. Expected package inputs are dynamic: `gwf.wel` is required only when WEL exists, and `gwf.riv` is required only when RIV exists. Package budgets are read only for packages present in the compiled model, so absent packages are not reported as fake zero budgets.

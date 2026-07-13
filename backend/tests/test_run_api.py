@@ -1,4 +1,5 @@
 from pathlib import Path
+import time
 
 import flopy
 import numpy as np
@@ -6,9 +7,23 @@ import pytest
 
 import app as app_module
 from mf6_executable import ExecutableResolutionError, resolve_mf6_executable
+from run_manifest_schema import TERMINAL_STATUSES
 from steady_flow_benchmark import benchmark_definition, expected_heads
 from test_flow_model import create_project_grid_flow
 from test_project_api import client_with_store
+
+
+def wait_for_run(client, project_id, run_id, timeout=30.0):
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        response = client.get(f"/projects/{project_id}/runs/{run_id}")
+        assert response.status_code == 200, response.get_json()
+        last = response.get_json()["run"]
+        if last["status"] in TERMINAL_STATUSES:
+            return last
+        time.sleep(0.2)
+    raise AssertionError(f"run {run_id} did not finish before timeout; last={last}")
 
 
 @pytest.mark.integration
@@ -27,10 +42,11 @@ def test_run_api_creates_persistent_manifest_and_budget_report(tmp_path, monkeyp
     )
     body = response.get_json()
 
-    assert response.status_code == 201, body
+    assert response.status_code == 202, body
     assert body["success"] is True
-    assert body["status"] in {"completed", "completed_with_warnings"}
+    assert body["status"] in {"queued", "starting"}
     assert body["run_id"].startswith("run_")
+    assert body["poll_url"].endswith(body["run_id"])
     assert "work_dir" not in response.get_data(as_text=True)
     assert str(tmp_path) not in response.get_data(as_text=True)
 
@@ -39,10 +55,9 @@ def test_run_api_creates_persistent_manifest_and_budget_report(tmp_path, monkeyp
     manifest_path = run_dir / "run_manifest.json"
     assert manifest_path.exists()
 
-    detail = client.get(f"/projects/{project['project_id']}/runs/{run_id}")
-    manifest = detail.get_json()["run"]
+    manifest = wait_for_run(client, project["project_id"], run_id)
     assert manifest["schema_name"] == "run_manifest"
-    assert manifest["schema_version"] == "1.0"
+    assert manifest["schema_version"] == "1.1"
     assert manifest["status"] in {"completed", "completed_with_warnings"}
     assert manifest["model_snapshot"]["project_checksum"]
     assert manifest["model_snapshot"]["grid_checksum"]
@@ -80,6 +95,20 @@ def test_run_api_creates_persistent_manifest_and_budget_report(tmp_path, monkeyp
     assert history.status_code == 200
     assert history.get_json()["runs"][0]["run_id"] == run_id
 
+    variables = client.get(f"/projects/{project['project_id']}/runs/{run_id}/results/variables")
+    assert variables.status_code == 200
+    assert {item["name"] for item in variables.get_json()["variables"]} == {"head", "budget"}
+
+    head_json = client.get(f"/projects/{project['project_id']}/runs/{run_id}/results/head?layer=0&format=json")
+    assert head_json.status_code == 200
+    assert head_json.get_json()["metadata"]["shape"] == [1, 5]
+    np.testing.assert_allclose(np.array(head_json.get_json()["values"]), expected.reshape(1, 5))
+
+    head_binary = client.get(f"/projects/{project['project_id']}/runs/{run_id}/results/head?layer=0&format=binary")
+    assert head_binary.status_code == 200
+    assert head_binary.mimetype == "application/octet-stream"
+    assert len(head_binary.data) == 5 * 8
+
 
 def test_run_api_validation_failure_preserves_manifest(tmp_path, monkeypatch):
     client, _store = client_with_store(tmp_path, monkeypatch)
@@ -92,19 +121,33 @@ def test_run_api_validation_failure_preserves_manifest(tmp_path, monkeypatch):
     )
     body = response.get_json()
 
-    assert response.status_code == 400
-    assert body["success"] is False
+    assert response.status_code == 202
+    assert body["success"] is True
     assert body["run_id"].startswith("run_")
-    assert body["status"] == "failed_validation"
-    assert body["error"]["code"] == "RUN_FLOW_MODEL_STALE"
     assert "Traceback" not in response.get_data(as_text=True)
     assert str(tmp_path) not in response.get_data(as_text=True)
 
-    detail = client.get(f"/projects/{project['project_id']}/runs/{body['run_id']}")
-    manifest = detail.get_json()["run"]
+    manifest = wait_for_run(client, project["project_id"], body["run_id"])
     assert manifest["status"] == "failed_validation"
     assert manifest["error"]["code"] == "RUN_FLOW_MODEL_STALE"
     assert manifest["finished_at"]
+
+
+def test_run_api_cancels_queued_run_idempotently(tmp_path, monkeypatch):
+    client, store = client_with_store(tmp_path, monkeypatch)
+    project, _grid_model, flow_model = create_project_grid_flow(client, store, project_id="prj_run_cancel")
+
+    response = client.post(
+        f"/projects/{project['project_id']}/runs",
+        json={"flow_model_id": flow_model["flow_model_id"]},
+    )
+    body = response.get_json()
+    assert response.status_code == 202
+    cancel = client.post(f"/projects/{project['project_id']}/runs/{body['run_id']}/cancel", json={"reason": "test cancel"})
+    assert cancel.status_code == 200
+    second = client.post(f"/projects/{project['project_id']}/runs/{body['run_id']}/cancel", json={"reason": "test cancel"})
+    assert second.status_code == 200
+    assert second.get_json()["status"] in {"cancel_requested", "cancelled", "completed", "completed_with_warnings"}
 
 
 def test_run_api_rejects_invalid_run_id_without_path_leak(tmp_path, monkeypatch):

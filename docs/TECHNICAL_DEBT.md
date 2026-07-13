@@ -1,3 +1,25 @@
+# 2026-07-13 Stability And Scalable Runtime Update
+
+Resolved or reduced:
+
+- Formal run submission is asynchronous and uses worker processes.
+- Run manifests have queue/start/cancel/timeout/interrupted states.
+- Windows manifest writes retry atomic replacement during polling.
+- Large head results can be read through Result API slices and binary responses.
+- Frontend API calls are centralized, with stores and package registry scaffolds.
+- Three.js viewer has centralized disposal helpers and removable resize listener.
+- GPU is optional and falls back to CPU; no GPU MF6 solver is claimed.
+
+Remaining debt:
+
+- `App.vue` is still too large and still owns flow payload construction and much
+  UI orchestration.
+- Result analysis UI only loads a default head slice after completion.
+- Resource limits are preflight estimates, not hard OS memory limits.
+- Legacy `/run-model` adapter remains for compatibility.
+- RCH/EVT upload UI still points to a legacy scatter workflow and is not a
+  formal Flow Model package path.
+
 # 2026-07-13 RIV Boundary v1 Update
 
 Resolved or reduced:

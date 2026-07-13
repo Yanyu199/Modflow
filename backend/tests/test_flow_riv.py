@@ -19,6 +19,7 @@ from riv_benchmark import (
 )
 from test_flow_model import diagnostic_codes
 from test_project_api import client_with_store, create_project
+from test_run_api import wait_for_run
 
 
 def riv_payload(project, grid_model_id, definition=None, *, include_wel=False, riv_cell=None):
@@ -267,14 +268,13 @@ def test_riv_run_api_benchmark_branches(tmp_path, monkeypatch, definition_factor
         json={"flow_model_id": flow_model["flow_model_id"]},
     )
     body = response.get_json()
-    assert response.status_code == 201, body
+    assert response.status_code == 202, body
     assert body["success"] is True
-    assert body["status"] == "completed"
+    assert body["status"] in {"queued", "starting"}
 
     run_id = body["run_id"]
     run_dir = Path(store.project_dir(project["project_id"])) / "runs" / run_id
-    detail = client.get(f"/projects/{project['project_id']}/runs/{run_id}")
-    manifest = detail.get_json()["run"]
+    manifest = wait_for_run(client, project["project_id"], run_id)
     assert manifest["status"] == "completed"
     assert "RIV" in manifest["model"]["packages"]
     assert manifest["mf6"]["return_code"] == 0

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -106,6 +107,45 @@ class RunManifestStore:
         manifests.sort(key=lambda item: item.get("created_at") or "", reverse=True)
         return [run_summary(item) for item in manifests[: max(1, min(int(limit), 100))]]
 
+    def list_full(self, project_id: str, *, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        run_root = self.runs_dir(project_id)
+        if not run_root.exists():
+            return []
+        manifests = []
+        for path in run_root.glob("run_*/run_manifest.json"):
+            try:
+                manifest = validate_manifest(json.loads(path.read_text(encoding="utf-8")))
+            except Exception:
+                continue
+            if status and manifest.get("status") != status:
+                continue
+            manifests.append(manifest)
+        manifests.sort(key=lambda item: item.get("created_at") or "")
+        return manifests
+
+    def iter_all(self) -> List[Dict[str, Any]]:
+        self.project_store.ensure_root()
+        manifests = []
+        for path in self.project_store.root.glob("*/runs/run_*/run_manifest.json"):
+            try:
+                manifests.append(validate_manifest(json.loads(path.read_text(encoding="utf-8"))))
+            except Exception:
+                continue
+        manifests.sort(key=lambda item: item.get("created_at") or "")
+        return manifests
+
+    def find_nonterminal_duplicate(self, project_id: str, flow_model_id: str, *, idempotency_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        from run_manifest_schema import TERMINAL_STATUSES
+
+        for manifest in self.list_full(project_id):
+            if manifest.get("status") in TERMINAL_STATUSES:
+                continue
+            if idempotency_key and (manifest.get("executor") or {}).get("idempotency_key") == idempotency_key:
+                return manifest
+            if manifest.get("flow_model_id") == flow_model_id and not idempotency_key:
+                return manifest
+        return None
+
     def _atomic_write(self, path: Path, data: Dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(prefix=".run-manifest-", suffix=".json", dir=str(path.parent))
@@ -113,7 +153,19 @@ class RunManifestStore:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2, allow_nan=False)
                 f.write("\n")
-            os.replace(tmp_name, path)
+            self._replace_with_retry(tmp_name, path)
         finally:
             if os.path.exists(tmp_name):
                 os.remove(tmp_name)
+
+    def _replace_with_retry(self, tmp_name: str, path: Path) -> None:
+        last_error = None
+        for attempt in range(8):
+            try:
+                os.replace(tmp_name, path)
+                return
+            except PermissionError as exc:
+                last_error = exc
+                time.sleep(0.025 * (attempt + 1))
+        if last_error:
+            raise last_error

@@ -10,7 +10,7 @@
         <div class="tab-content">
           <div class="upload-bar">
             <el-upload
-              action="http://localhost:5000/upload-scatter"
+              :action="`${apiBaseUrl}/upload-scatter`"
               :data="uploadData"
               :show-file-list="false"
               :before-upload="beforeUpload"
@@ -59,7 +59,7 @@
         <div class="tab-content">
           <div class="upload-bar">
             <el-upload
-              action="http://localhost:5000/upload-scatter"
+              :action="`${apiBaseUrl}/upload-scatter`"
               :data="uploadData"
               :show-file-list="false"
               :before-upload="beforeUpload"
@@ -109,6 +109,8 @@
 </template>
 
 <script>
+import { API_BASE_URL } from '../api/client';
+
 export default {
   name: 'RchEvtManager',
   props: {
@@ -124,6 +126,9 @@ export default {
     };
   },
   computed: {
+    apiBaseUrl() {
+      return API_BASE_URL;
+    },
     uploadData() {
       return { project_id: this.projectId || '' };
     }

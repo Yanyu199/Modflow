@@ -50,7 +50,9 @@
 <script>
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import axios from 'axios';
+import { getGridCell } from '../api/grids';
+import { createBaseScene, detectWebGLCapabilities } from '../visualization/GroundwaterScene';
+import { disposeObject3D, disposeRenderer, disposeScene, removeAndDispose } from '../visualization/resourceDisposal';
 
 import ViewerTopBar from './ViewerTopBar.vue';
 import LayerVisibilityPanel from './LayerVisibilityPanel.vue';
@@ -88,7 +90,8 @@ export default {
       scene: null, camera: null, renderer: null, controls: null,
       meshes: [], boreholeGroup: null, flowArrows: [], pathLines: [],
       layerVisibility: [], maxLayer: 0,
-      initialized: false, animationId: null, clickHandler: null,
+      initialized: false, animationId: null, clickHandler: null, resizeHandler: null,
+      webglCapabilities: null,
       currentBoreholes: [], cellDataMap: {},
       cx: 0, cy: 0, currentCellSize: 50,
       
@@ -132,9 +135,22 @@ export default {
   beforeDestroy() {
     if (this.animationId) cancelAnimationFrame(this.animationId);
     if (this.clickHandler && this.$refs.container) this.$refs.container.removeEventListener('click', this.clickHandler);
-    if (this.renderer) this.renderer.dispose();
+    if (this.resizeHandler) window.removeEventListener('resize', this.resizeHandler);
     this.clearArrows();
-    if (this.boreholeGroup) this.scene.remove(this.boreholeGroup);
+    this.pathLines.forEach(line => removeAndDispose(this.scene, line));
+    this.pathLines = [];
+    this.meshes.forEach(mesh => removeAndDispose(this.scene, mesh));
+    this.meshes = [];
+    if (this.boreholeGroup) {
+      removeAndDispose(this.scene, this.boreholeGroup);
+      this.boreholeGroup = null;
+    }
+    if (this.controls) this.controls.dispose();
+    disposeScene(this.scene);
+    disposeRenderer(this.renderer, { forceContextLoss: true });
+    this.scene = null;
+    this.camera = null;
+    this.renderer = null;
   },
   methods: {
     onZScaleChange() {
@@ -168,8 +184,7 @@ export default {
 
     initThree() {
       const container = this.$refs.container;
-      this.scene = new THREE.Scene();
-      this.scene.background = new THREE.Color(0xf0f9ff);
+      this.scene = createBaseScene();
       
       this.camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 1, 500000);
       this.camera.position.set(2000, 2000, 2000); 
@@ -178,6 +193,7 @@ export default {
       this.renderer.setSize(container.clientWidth, container.clientHeight);
       this.renderer.setPixelRatio(window.devicePixelRatio); 
       this.renderer.shadowMap.enabled = true;
+      this.webglCapabilities = detectWebGLCapabilities(this.renderer);
       
       container.innerHTML = '';
       container.appendChild(this.renderer.domElement);
@@ -185,30 +201,26 @@ export default {
       this.controls = new OrbitControls(this.camera, this.renderer.domElement);
       this.controls.enableDamping = true;
       
-      this.scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
-      dirLight.position.set(500, 2000, 1000);
-      dirLight.castShadow = true;
-      this.scene.add(dirLight);
-      
       this.initialized = true;
       this.setupClickHandler();
       this.animate();
       
-      window.addEventListener('resize', () => {
+      this.resizeHandler = () => {
         if(this.camera && this.renderer && this.$refs.container) {
           const w = this.$refs.container.clientWidth;
           const h = this.$refs.container.clientHeight;
+          if (!w || !h) return;
           this.camera.aspect = w / h;
           this.camera.updateProjectionMatrix();
           this.renderer.setSize(w, h);
         }
-      });
+      };
+      window.addEventListener('resize', this.resizeHandler);
     },
 
     drawVoxels(points) {
       if (!this.scene) return;
-      this.meshes.forEach(m => { this.scene.remove(m); if(m.geometry) m.geometry.dispose(); if(m.material) m.material.dispose(); });
+      this.meshes.forEach(m => removeAndDispose(this.scene, m));
       this.meshes = [];
       this.cellDataMap = {};
 
@@ -381,7 +393,7 @@ export default {
       this.currentBoreholes = boreholes;
 
       if (this.boreholeGroup) {
-        this.scene.remove(this.boreholeGroup);
+        removeAndDispose(this.scene, this.boreholeGroup);
       }
       this.boreholeGroup = new THREE.Group();
 
@@ -457,7 +469,7 @@ export default {
     },
 
     drawPathLines(pathData, cx, cy, zScale) {
-      this.pathLines.forEach(line => this.scene.remove(line));
+      this.pathLines.forEach(line => removeAndDispose(this.scene, line));
       this.pathLines = [];
       if (!pathData) return;
 
@@ -475,9 +487,7 @@ export default {
 
     clearArrows() {
       this.flowArrows.forEach(arrow => {
-        this.scene.remove(arrow);
-        if (arrow.line) { if (arrow.line.geometry) arrow.line.geometry.dispose(); if (arrow.line.material) arrow.line.material.dispose(); }
-        if (arrow.cone) { if (arrow.cone.geometry) arrow.cone.geometry.dispose(); if (arrow.cone.material) arrow.cone.material.dispose(); }
+        removeAndDispose(this.scene, arrow);
       });
       this.flowArrows = [];
     },
@@ -540,9 +550,7 @@ export default {
         return;
       }
       try {
-        const response = await axios.get(
-          `http://localhost:5000/projects/${this.projectId}/grids/${this.gridModelId}/cells/${encodeURIComponent(cellData.cell_id)}`
-        );
+        const response = await getGridCell(this.projectId, this.gridModelId, cellData.cell_id);
         const detail = response.data.cell || {};
         this.selectedCell = {
           ...detail,

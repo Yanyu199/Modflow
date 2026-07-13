@@ -1,5 +1,6 @@
 // webpack.config.js
 const path = require('path');
+const webpack = require('webpack');
 const { VueLoaderPlugin } = require('vue-loader');
 
 module.exports = {
@@ -38,7 +39,10 @@ module.exports = {
     ]
   },
   plugins: [
-    new VueLoaderPlugin()
+    new VueLoaderPlugin(),
+    new webpack.DefinePlugin({
+      'process.env.FLOPY_API_BASE_URL': JSON.stringify(process.env.FLOPY_API_BASE_URL || '')
+    })
   ],
   resolve: {
     alias: {

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -29,6 +32,8 @@ from run_manifest_schema import (
     ERROR_BY_STATUS,
     STATUS_COMPLETED,
     STATUS_COMPLETED_WITH_WARNINGS,
+    STATUS_CANCEL_REQUESTED,
+    STATUS_CANCELLED,
     STATUS_COMPILING,
     STATUS_FAILED_BUDGET,
     STATUS_FAILED_COMPILE,
@@ -39,13 +44,20 @@ from run_manifest_schema import (
     STATUS_FAILED_OUTPUTS,
     STATUS_FAILED_POSTPROCESSING,
     STATUS_FAILED_VALIDATION,
+    STATUS_INTERRUPTED,
     STATUS_POSTPROCESSING,
+    STATUS_QUEUED,
     STATUS_RUNNING,
+    STATUS_STARTING,
+    STATUS_TIMED_OUT,
     STATUS_VALIDATING,
     STATUS_WRITING_INPUT,
+    utc_now_iso,
     run_summary,
 )
 from run_manifest_store import RunManifestNotFoundError, RunManifestStore
+from resource_guard import ResourceLimitError, enforce_run_preflight
+from runtime_config import DEFAULT_RUNTIME_CONFIG, RuntimeConfig
 
 
 class RunFailure(RuntimeError):
@@ -58,15 +70,51 @@ class RunFailure(RuntimeError):
 
 
 class RunService:
-    def __init__(self, project_store=None, flow_service=None, run_store=None, geology_store=None):
+    def __init__(self, project_store=None, flow_service=None, run_store=None, geology_store=None, config: RuntimeConfig = DEFAULT_RUNTIME_CONFIG):
         self.project_store = project_store or ProjectStore()
         self.flow_service = flow_service or FlowModelService(self.project_store)
         self.run_store = run_store or RunManifestStore(self.project_store)
         self.geology_store = geology_store or GeologyModelStore(self.project_store)
+        self.config = config
 
-    def run(self, project_id: str, flow_model_id: str, *, keep_artifacts: Optional[bool] = None) -> Dict[str, Any]:
+    def create_queued_run(
+        self,
+        project_id: str,
+        flow_model_id: str,
+        *,
+        keep_artifacts: Optional[bool] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
         project = self.project_store.get(project_id)
+        duplicate = self.run_store.find_nonterminal_duplicate(project_id, flow_model_id, idempotency_key=idempotency_key)
+        if duplicate:
+            return {"manifest": duplicate, "duplicate": True}
+        flow_model = self.flow_service.flow_store.get_active(project)
+        if flow_model.get("flow_model_id") != flow_model_id:
+            raise RunFailure(STATUS_FAILED_VALIDATION, "RUN_FLOW_MODEL_NOT_FOUND", "flow_model_id is not the active flow model for this project.")
+        project, grid_manifest, _arrays = self.flow_service._load_project_grid(project_id, flow_model["grid_model_id"])
+        estimate = enforce_run_preflight(grid_manifest, self.config)
         manifest = self.run_store.create(project, flow_model_id)
+        manifest["executor"] = {
+            **(manifest.get("executor") or {}),
+            "type": "local_process",
+            "idempotency_key": idempotency_key,
+            "timeout_seconds": self.config.run_timeout_seconds,
+            "resource_estimate": estimate,
+        }
+        if keep_artifacts is not None:
+            manifest["retention"]["artifacts_retained"] = bool(keep_artifacts)
+        manifest = self.run_store.save(manifest)
+        manifest = self.run_store.transition(manifest, STATUS_QUEUED)
+        return {"manifest": manifest, "duplicate": False}
+
+    def run(self, project_id: str, flow_model_id: str, *, keep_artifacts: Optional[bool] = None, run_id: Optional[str] = None) -> Dict[str, Any]:
+        project = self.project_store.get(project_id)
+        if run_id:
+            manifest = self.run_store.load(project_id, run_id)
+            flow_model_id = manifest["flow_model_id"]
+        else:
+            manifest = self.run_store.create(project, flow_model_id)
         run_id = manifest["run_id"]
         run_root = self.run_store.run_dir(project_id, run_id)
         input_dir = self.run_store.input_dir(project_id, run_id)
@@ -78,6 +126,9 @@ class RunService:
             manifest["retention"]["artifacts_retained"] = bool(keep_artifacts)
             manifest = self.run_store.save(manifest)
         try:
+            if manifest.get("status") == STATUS_QUEUED:
+                manifest = self.run_store.transition(manifest, STATUS_STARTING)
+            manifest = self._raise_if_cancel_requested(manifest)
             manifest = self.run_store.transition(manifest, STATUS_VALIDATING)
             project = self.project_store.get(project_id)
             flow_model = self.flow_service.flow_store.get_active(project)
@@ -130,6 +181,7 @@ class RunService:
                 },
             )
 
+            manifest = self._raise_if_cancel_requested(manifest)
             manifest = self.run_store.transition(manifest, STATUS_COMPILING)
             try:
                 compiled = self.flow_service.compile_to_simulation(
@@ -153,14 +205,16 @@ class RunService:
                     "Compiled flow model does not match the run snapshot.",
                 )
 
+            manifest = self._raise_if_cancel_requested(manifest)
             manifest = self.run_store.transition(manifest, STATUS_WRITING_INPUT)
             try:
                 compiled["simulation"].write_simulation()
             except Exception as exc:
                 raise RunFailure(STATUS_FAILED_INPUT_WRITE, "RUN_INPUT_WRITE_FAILED", str(exc))
 
+            manifest = self._raise_if_cancel_requested(manifest)
             manifest = self.run_store.transition(manifest, STATUS_RUNNING)
-            execution = self._execute_mf6(resolution.path, input_dir, logs_dir)
+            execution = self._execute_mf6(resolution.path, input_dir, logs_dir, manifest=manifest)
             mf6_stdout = execution["stdout_lines"]
             manifest = self._update_manifest(
                 manifest,
@@ -179,6 +233,7 @@ class RunService:
                     {"return_code": execution["return_code"]},
                 )
 
+            manifest = self._raise_if_cancel_requested(manifest)
             manifest = self.run_store.transition(manifest, STATUS_POSTPROCESSING)
             package_names = list((manifest.get("model") or {}).get("packages") or [])
             logical_files = self._logical_output_files(package_names)
@@ -225,6 +280,7 @@ class RunService:
                     water_budget,
                 )
 
+            manifest = self._raise_if_cancel_requested(manifest)
             try:
                 grid_info = self.flow_service._grid_info(grid_manifest, arrays)
                 points = process_results(
@@ -312,10 +368,18 @@ class RunService:
         return self.run_store.save(updated)
 
     def _fail(self, manifest, status, code, message, details=None):
+        try:
+            latest = self.run_store.load(manifest["project_id"], manifest["run_id"])
+            if latest.get("status") != manifest.get("status"):
+                manifest = latest
+        except Exception:
+            pass
         if manifest.get("status") != status:
             manifest = self.run_store.transition(manifest, status)
         manifest["error"] = {"code": code, "message": message, "details": details or []}
         manifest.setdefault("warnings", [])
+        if status == STATUS_CANCELLED:
+            manifest.setdefault("executor", {})["cancelled_at"] = utc_now_iso()
         return self.run_store.save(manifest)
 
     def _result(self, success, manifest, points, pathlines, mf6_stdout):
@@ -341,27 +405,73 @@ class RunService:
             "package_preview": manifest.get("package_preview"),
         }
 
-    def _execute_mf6(self, executable, input_dir: Path, logs_dir: Path):
+    def _execute_mf6(self, executable, input_dir: Path, logs_dir: Path, *, manifest):
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 [str(executable)],
                 cwd=str(input_dir),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                start_new_session=(os.name != "nt"),
             )
         except FileNotFoundError as exc:
             raise RunFailure(STATUS_FAILED_EXECUTABLE, "RUN_MF6_START_FAILED", str(exc))
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
+        manifest.setdefault("executor", {})["mf6_pid"] = int(process.pid)
+        manifest = self.run_store.save(manifest)
+        started = time.time()
+        timeout = int((manifest.get("executor") or {}).get("timeout_seconds") or self.config.run_timeout_seconds)
+        while process.poll() is None:
+            try:
+                latest = self.run_store.load(manifest["project_id"], manifest["run_id"])
+            except Exception:
+                latest = manifest
+            if latest.get("status") == STATUS_CANCEL_REQUESTED:
+                self._terminate_process_tree(process.pid)
+                stdout, stderr = process.communicate(timeout=5)
+                (logs_dir / "mf6_stdout.txt").write_text(stdout or "", encoding="utf-8")
+                (logs_dir / "mf6_stderr.txt").write_text(stderr or "", encoding="utf-8")
+                raise RunFailure(STATUS_CANCELLED, "RUN_CANCELLED", "Run was cancelled by request.")
+            if timeout > 0 and time.time() - started > timeout:
+                self._terminate_process_tree(process.pid)
+                stdout, stderr = process.communicate(timeout=5)
+                (logs_dir / "mf6_stdout.txt").write_text(stdout or "", encoding="utf-8")
+                (logs_dir / "mf6_stderr.txt").write_text(stderr or "", encoding="utf-8")
+                raise RunFailure(STATUS_TIMED_OUT, "RUN_TIMED_OUT", f"Run exceeded timeout of {timeout} seconds.")
+            time.sleep(0.2)
+        stdout, stderr = process.communicate()
+        stdout = stdout or ""
+        stderr = stderr or ""
         (logs_dir / "mf6_stdout.txt").write_text(stdout, encoding="utf-8")
         (logs_dir / "mf6_stderr.txt").write_text(stderr, encoding="utf-8")
         return {
-            "return_code": int(completed.returncode),
+            "return_code": int(process.returncode),
             "stdout_lines": stdout.splitlines(),
             "stderr_lines": stderr.splitlines(),
         }
+
+    def _terminate_process_tree(self, pid):
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True)
+            return
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                return
+
+    def _raise_if_cancel_requested(self, manifest):
+        try:
+            latest = self.run_store.load(manifest["project_id"], manifest["run_id"])
+        except Exception:
+            latest = manifest
+        if latest.get("status") == STATUS_CANCEL_REQUESTED:
+            raise RunFailure(STATUS_CANCELLED, "RUN_CANCELLED", "Run was cancelled by request.")
+        return latest
 
     def _mf6_version(self, executable):
         try:
@@ -424,6 +534,8 @@ class RunService:
             STATUS_COMPILING: STATUS_FAILED_COMPILE,
             STATUS_WRITING_INPUT: STATUS_FAILED_INPUT_WRITE,
             STATUS_RUNNING: STATUS_FAILED_EXECUTION,
+            STATUS_STARTING: STATUS_INTERRUPTED,
+            STATUS_CANCEL_REQUESTED: STATUS_CANCELLED,
             STATUS_POSTPROCESSING: STATUS_FAILED_POSTPROCESSING,
         }.get(status, STATUS_FAILED_POSTPROCESSING)
 

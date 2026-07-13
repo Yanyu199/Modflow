@@ -1,3 +1,20 @@
+# 2026-07-13 Stability And Scalable Runtime Update
+
+Before adding GHB/DRN/RCH/EVT, the runtime architecture now has the minimum
+stability foundation:
+
+- async formal Run API with local worker process execution;
+- cancel, timeout, interrupted-state recovery, and idempotency key support;
+- resource preflight and scale classification;
+- Result API for head/budget slices;
+- frontend API/store/registry scaffolding;
+- optional CPU/GPU array backend with NumPy fallback;
+- repeatable data-path performance baseline.
+
+The next smallest vertical modeling task remains GHB or DRN. Do not start
+transient flow or MODPATH until the remaining steady-flow source/sink package
+path is schema/API/FloPy/result/test complete.
+
 # 2026-07-13 RIV Boundary v1 Update
 
 The RIV vertical slice recommended by the previous roadmap is now implemented for the first steady-flow scope:

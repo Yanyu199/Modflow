@@ -69,11 +69,23 @@
         type="success"
         style="width: 100%; margin-top: 10px; margin-left: 0;"
         @click="runModel"
-        :disabled="!canRunFlow"
-        :loading="loading"
+        :disabled="!canRunFlow || runInProgress"
+        :loading="loading || runInProgress"
         icon="el-icon-video-play"
       >
         运行 MODFLOW 6
+      </el-button>
+
+      <el-button
+        v-if="runInProgress"
+        type="danger"
+        plain
+        style="width: 100%; margin-top: 10px; margin-left: 0;"
+        @click="$emit('cancel-run')"
+        :loading="cancelling"
+        icon="el-icon-close"
+      >
+        Cancel Run
       </el-button>
 
       <el-button
@@ -105,7 +117,7 @@
 </template>
 
 <script>
-import axios from 'axios';
+import { exportModel } from '../api/results';
 
 export default {
   props: {
@@ -115,7 +127,10 @@ export default {
     logs: { type: String, default: '' },
     flowCheck: { type: Object, default: null },
     packagePreview: { type: Object, default: null },
-    canRunFlow: { type: Boolean, default: false }
+    canRunFlow: { type: Boolean, default: false },
+    currentRun: { type: Object, default: null },
+    polling: { type: Boolean, default: false },
+    cancelling: { type: Boolean, default: false }
   },
   data() {
     return {
@@ -136,6 +151,10 @@ export default {
     checkerTitle() {
       if (!this.flowCheck) return '尚未检查 Flow Model';
       return this.checkerRunnable ? 'Flow Model 可运行' : 'Flow Model 存在阻断问题';
+    },
+    runInProgress() {
+      const status = this.currentRun && this.currentRun.status;
+      return this.polling || ['queued', 'starting', 'validating', 'compiling', 'writing_input', 'running', 'postprocessing', 'cancel_requested'].includes(status);
     }
   },
   watch: {
@@ -152,9 +171,7 @@ export default {
       if (!this.resultPoints || this.resultPoints.length === 0) return;
       try {
         this.$message.info('正在生成模型文件...');
-        const res = await axios.post('http://localhost:5000/export-model', {
-          points: this.resultPoints
-        }, { responseType: 'blob' });
+        const res = await exportModel(this.resultPoints);
         const url = window.URL.createObjectURL(new Blob([res.data]));
         const link = document.createElement('a');
         link.href = url;

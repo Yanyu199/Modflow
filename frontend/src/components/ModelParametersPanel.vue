@@ -60,8 +60,12 @@
           :flowCheck="flowCheck"
           :packagePreview="packagePreview"
           :canRunFlow="canRunFlow"
+          :currentRun="currentRun"
+          :polling="runPolling"
+          :cancelling="runCancelling"
           @save-flow="(val) => $emit('save-flow', val)"
-          @run="(val) => $emit('run', val)" 
+          @run="(val) => $emit('run', val)"
+          @cancel-run="$emit('cancel-run')"
         />
       </el-collapse-item>
 
@@ -112,6 +116,9 @@ export default {
     loading: { type: Boolean, default: false },
     resultPoints: { type: Array, default: () => [] },
     currentLogs: { type: String, default: '' },
+    currentRun: { type: Object, default: null },
+    runPolling: { type: Boolean, default: false },
+    runCancelling: { type: Boolean, default: false },
     projectId: { type: String, default: null },
     panelTitle: { type: String, default: '模型参数与运行 (Step 3-7)' },
     showGridSettings: { type: Boolean, default: true },

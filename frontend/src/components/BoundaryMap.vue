@@ -48,8 +48,8 @@
 </template>
 
 <script>
-import axios from 'axios';
 import Plotly from 'plotly.js-dist-min';
+import { API_BASE_URL, uploadShapefile } from '../api/uploads';
 
 export default {
   name: 'BoundaryMap',
@@ -80,7 +80,7 @@ export default {
   },
   computed: {
     apiBaseUrl() {
-      return 'http://localhost:5000';
+      return API_BASE_URL;
     },
     uploadData() {
       return { project_id: this.projectId || '' };
@@ -151,7 +151,7 @@ export default {
       formData.append('file', options.file, options.file.name || 'boundary.zip');
       formData.append('project_id', uploadContext.project_id);
       try {
-        const response = await axios.post(`${this.apiBaseUrl}/upload-shapefile`, formData);
+        const response = await uploadShapefile(formData);
         this.handleBoundaryUploadResponse(response.data, options.file, uploadContext);
         if (options.onSuccess) options.onSuccess(response.data, options.file);
       } catch (error) {
@@ -226,7 +226,7 @@ export default {
       formData.append('project_id', confirmedContext.project_id);
       formData.append('assume_project_crs', 'true');
       try {
-        const response = await axios.post(`${this.apiBaseUrl}/upload-shapefile`, formData);
+        const response = await uploadShapefile(formData);
         if (response.data && response.data.success) {
           this.applyBoundaryUploadResult(response.data);
           this.$message.success('已按当前工程 CRS 导入边界');

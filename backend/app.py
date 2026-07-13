@@ -24,9 +24,13 @@ from grid_model_service import GridModelService
 from grid_model_store import GridArtifactError
 from project_schema import ProjectValidationError
 from project_store import ProjectConflictError, ProjectNotFoundError, ProjectStore, validate_project_id
-from run_manifest_schema import RunManifestValidationError, validate_run_id
+from run_manifest_schema import RunManifestValidationError, run_summary, validate_run_id
 from run_manifest_store import RunManifestNotFoundError
 from run_service import RunService
+from run_executor import LocalProcessRunExecutor
+from result_service import ResultService, ResultServiceError
+from resource_guard import ResourceLimitError
+from runtime_config import DEFAULT_RUNTIME_CONFIG
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_ZIP_BYTES
@@ -39,6 +43,16 @@ geology_service = GeologyModelService(project_store)
 grid_service = GridModelService(project_store)
 flow_service = FlowModelService(project_store)
 run_service = RunService(project_store, flow_service=flow_service)
+run_executor = LocalProcessRunExecutor(project_store, DEFAULT_RUNTIME_CONFIG)
+result_service = ResultService(project_store)
+
+
+def ensure_run_executor():
+    global run_executor, result_service
+    if getattr(run_executor.project_store, "root", None) != project_store.root:
+        run_executor = LocalProcessRunExecutor(project_store, DEFAULT_RUNTIME_CONFIG)
+        result_service = ResultService(project_store)
+    return run_executor
 
 
 def api_error(message, status=400, code="validation_error", details=None):
@@ -99,7 +113,15 @@ def run_exception_response(exc):
         return api_error("Run not found.", 404, "run_not_found")
     if isinstance(exc, RunManifestValidationError):
         return api_error("Run request is invalid.", 400, "run_validation_error")
+    if isinstance(exc, ResourceLimitError):
+        return api_error(exc.message, 413, exc.code.lower(), exc.details)
     return flow_exception_response(exc)
+
+
+def result_exception_response(exc):
+    if isinstance(exc, ResultServiceError):
+        return api_error(exc.message, exc.status, exc.code.lower(), exc.details)
+    return run_exception_response(exc)
 
 
 def json_payload():
@@ -433,25 +455,24 @@ def create_run(project_id):
         flow_model_id = payload.get("flow_model_id")
         if not flow_model_id:
             return api_error("flow_model_id is required.", 400, "flow_model_id_required")
-        result = run_service.run(
+        idempotency_key = request.headers.get("Idempotency-Key") or payload.get("idempotency_key")
+        result = ensure_run_executor().submit(
             project_id,
             flow_model_id,
             keep_artifacts=payload.get("keep_artifacts"),
+            idempotency_key=idempotency_key,
         )
-        status = 201 if result["success"] else 400
+        manifest = result["manifest"]
         return jsonify({
-            "success": result["success"],
-            "run_id": result["run_id"],
-            "status": result["status"],
-            "run": result["run"],
-            "points": result.get("points", []),
-            "pathlines": result.get("pathlines", []),
-            "logs": result.get("logs", ""),
-            "diagnostic_outputs": result.get("diagnostic_outputs", []),
-            "checker": result.get("checker"),
-            "package_preview": result.get("package_preview"),
-            "error": (result.get("manifest") or {}).get("error"),
-        }), status
+            "success": True,
+            "accepted": True,
+            "duplicate": result["duplicate"],
+            "run_id": manifest["run_id"],
+            "status": manifest["status"],
+            "run": run_summary(manifest),
+            "poll_url": f"/projects/{project_id}/runs/{manifest['run_id']}",
+            "cancel_url": f"/projects/{project_id}/runs/{manifest['run_id']}/cancel",
+        }), 202
     except Exception as e:
         return run_exception_response(e)
 
@@ -485,6 +506,69 @@ def get_run_summary(project_id, run_id):
         return jsonify({"success": True, "run": summary})
     except Exception as e:
         return run_exception_response(e)
+
+
+@app.route('/projects/<project_id>/runs/<run_id>/cancel', methods=['POST'])
+def cancel_run(project_id, run_id):
+    try:
+        validate_run_id(run_id)
+        payload = json_payload()
+        result = ensure_run_executor().cancel(
+            project_id,
+            run_id,
+            reason=payload.get("reason") or "cancel requested",
+            source=payload.get("source") or "api",
+        )
+        manifest = result["manifest"]
+        return jsonify({"success": True, "changed": result["changed"], "run_id": run_id, "status": manifest["status"], "run": run_summary(manifest)})
+    except Exception as e:
+        return run_exception_response(e)
+
+
+@app.route('/projects/<project_id>/runs/<run_id>/results/variables', methods=['GET'])
+def result_variables(project_id, run_id):
+    try:
+        validate_run_id(run_id)
+        ensure_run_executor()
+        return jsonify({"success": True, **result_service.variables(project_id, run_id)})
+    except Exception as e:
+        return result_exception_response(e)
+
+
+@app.route('/projects/<project_id>/runs/<run_id>/results/budget', methods=['GET'])
+def result_budget(project_id, run_id):
+    try:
+        validate_run_id(run_id)
+        ensure_run_executor()
+        return jsonify({"success": True, **result_service.budget(project_id, run_id)})
+    except Exception as e:
+        return result_exception_response(e)
+
+
+@app.route('/projects/<project_id>/runs/<run_id>/results/head', methods=['GET'])
+def result_head(project_id, run_id):
+    try:
+        validate_run_id(run_id)
+        ensure_run_executor()
+        fmt = request.args.get("format", "json")
+        result = result_service.head_slice(
+            project_id,
+            run_id,
+            layer=int(request.args.get("layer", 0)),
+            time_index=int(request.args.get("time_index", -1)),
+            row_start=int(request.args.get("row_start", 0)),
+            row_end=int(request.args["row_end"]) if "row_end" in request.args else None,
+            column_start=int(request.args.get("column_start", 0)),
+            column_end=int(request.args["column_end"]) if "column_end" in request.args else None,
+            fmt=fmt,
+        )
+        if fmt == "binary":
+            response = Response(result["bytes"], mimetype="application/octet-stream")
+            response.headers["X-Result-Metadata"] = __import__("json").dumps(result["metadata"], separators=(",", ":"))
+            return response
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        return result_exception_response(e)
 
 
 @app.route('/upload-boreholes', methods=['POST'])
@@ -608,29 +692,28 @@ def run():
                     "flow_model_authoritative",
                     {"legacy_fields": supplied_legacy_fields},
                 )
-            res_data = run_service.run(
+            idempotency_key = request.headers.get("Idempotency-Key") or data.get("idempotency_key")
+            result = ensure_run_executor().submit(
                 project_id,
                 flow_model_id,
                 keep_artifacts=data.get("keep_artifacts"),
+                idempotency_key=idempotency_key,
             )
+            manifest = result["manifest"]
             response = {
-                "success": res_data["success"],
-                "points": res_data["points"],
-                "pathlines": res_data.get("pathlines", []),
-                "logs": res_data.get("logs", ""),
-                "run_id": res_data.get("run_id"),
-                "status": res_data.get("status"),
-                "run": res_data.get("run"),
-                "flow_model_id": res_data.get("flow_model_id"),
-                "grid_model_id": res_data.get("grid_model_id"),
-                "checker": res_data.get("checker"),
-                "package_preview": res_data.get("package_preview"),
-                "diagnostic_outputs": res_data.get("diagnostic_outputs", []),
+                "success": True,
+                "accepted": True,
+                "duplicate": result["duplicate"],
+                "run_id": manifest["run_id"],
+                "status": manifest["status"],
+                "run": run_summary(manifest),
+                "flow_model_id": manifest.get("flow_model_id"),
+                "grid_model_id": manifest.get("grid_model_id"),
+                "poll_url": f"/projects/{project_id}/runs/{manifest['run_id']}",
+                "cancel_url": f"/projects/{project_id}/runs/{manifest['run_id']}/cancel",
                 "deprecated_run_model_entrypoint": True,
             }
-            if not res_data["success"]:
-                response["error"] = (res_data.get("manifest") or {}).get("error")
-            return jsonify(response), 200 if res_data["success"] else 400
+            return jsonify(response), 202
 
         if not data.get("allow_legacy_flow_model"):
             return api_error(

@@ -210,23 +210,32 @@ def test_run_model_requires_saved_flow_model_and_rejects_legacy_overrides(tmp_pa
     assert override.status_code == 400
     assert override.get_json()["code"] == "flow_model_authoritative"
 
-    def fake_run(project_id, flow_model_id, keep_artifacts=None):
-        return {
-            "success": True,
-            "status": "completed",
-            "points": [],
-            "pathlines": [],
-            "logs": "stub",
-            "run": {"run_id": "run_1111111111111111", "status": "completed"},
-            "run_id": "run_1111111111111111",
-            "flow_model_id": flow_model_id,
-            "grid_model_id": grid_model["grid_model_id"],
-            "checker": {"runnable": True},
-            "package_preview": {"packages": []},
-            "diagnostic_outputs": [],
-        }
+    class FakeExecutor:
+        def submit(self, project_id, flow_model_id, keep_artifacts=None, idempotency_key=None):
+            return {
+                "duplicate": False,
+                "manifest": {
+                    "run_id": "run_1111111111111111",
+                    "project_id": project_id,
+                    "flow_model_id": flow_model_id,
+                    "grid_model_id": grid_model["grid_model_id"],
+                    "status": "queued",
+                    "created_at": "2026-07-13T00:00:00Z",
+                    "started_at": None,
+                    "finished_at": None,
+                    "geology_model_id": None,
+                    "mf6": {},
+                    "convergence": {},
+                    "water_budget": {},
+                    "package_budget": {},
+                    "outputs": {},
+                    "warnings": [],
+                    "error": None,
+                    "executor": {},
+                },
+            }
 
-    monkeypatch.setattr(app_module.run_service, "run", fake_run)
+    monkeypatch.setattr(app_module, "ensure_run_executor", lambda: FakeExecutor())
     response = client.post(
         "/run-model",
         json={
@@ -235,9 +244,10 @@ def test_run_model_requires_saved_flow_model_and_rejects_legacy_overrides(tmp_pa
             "flow_model_id": flow_model["flow_model_id"],
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 202
     assert response.get_json()["flow_model_id"] == flow_model["flow_model_id"]
     assert response.get_json()["deprecated_run_model_entrypoint"] is True
+    assert response.get_json()["status"] == "queued"
     assert "work_dir" not in response.get_data(as_text=True)
 
 

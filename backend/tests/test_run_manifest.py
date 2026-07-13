@@ -52,8 +52,10 @@ def test_run_manifest_store_persists_json_and_summaries(tmp_path):
 
     manifest = run_store.create(project, "flow_1111111111111111")
     assert manifest["schema_name"] == "run_manifest"
-    assert manifest["schema_version"] == "1.0"
+    assert manifest["schema_version"] == "1.1"
     assert manifest["run_id"].startswith("run_")
+    assert manifest["executor"]["type"] is None
+    assert manifest["executor"]["timeout_seconds"] is None
 
     manifest = run_store.transition(manifest, STATUS_VALIDATING)
     loaded = run_store.load(project["project_id"], manifest["run_id"])

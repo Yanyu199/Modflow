@@ -286,6 +286,9 @@
           :loading="loading"
           :resultPoints="resultPoints"
           :currentLogs="currentLogs"
+          :currentRun="currentRun"
+          :runPolling="runPolling"
+          :runCancelling="runCancelling"
           :projectId="projectId"
           panelTitle="水动力场参数与运行"
           :showGridSettings="false"
@@ -300,6 +303,7 @@
           @save-boundary="onBoundaryConfigSave"
           @remove-boundary="onBoundaryConfigRemove"
           @run="handleRun"
+          @cancel-run="handleCancelRun"
         />
 
         <el-card v-if="activePage === 'analysis'" class="floating-card scrollable-card" shadow="always" :body-style="{padding: '10px'}">
@@ -368,7 +372,18 @@ import LayerPanel from './components/LayerPanel.vue';
 import GridSettings from './components/GridSettings.vue';
 import AnalysisPanel from './components/AnalysisPanel.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
-import axios from 'axios';
+import { createProject, updateProject } from './api/projects';
+import { uploadBoreholes, validateGeologyModel, createGeologyModel } from './api/geologyModels';
+import { createGrid, getGridRenderData } from './api/grids';
+import { validateFlowModel, createFlowModel, updateFlowModel, getPackagePreview } from './api/flowModels';
+import { getRunSummary, listRuns } from './api/runs';
+import { getHeadSlice } from './api/results';
+import { submitAndPollRun, requestRunCancel, runStore } from './stores/runStore';
+import { setCurrentProject, updateProjectReferences } from './stores/projectStore';
+import { setGeologyModel } from './stores/geologyStore';
+import { setGridModel, resetGridStore } from './stores/gridStore';
+import { resetFlowStore, setFlowChecker, setFlowModel, setPackagePreview } from './stores/flowStore';
+import { buildFlowModelPayload as buildFormalFlowModelPayload } from './features/flowPackages/flowPayloadBuilder';
 
 export default {
   name: 'App',
@@ -503,6 +518,12 @@ export default {
         && this.flowCheck.runnable
         && !this.hasBlockingGridErrors
       );
+    },
+    runPolling() {
+      return runStore.polling || runStore.submitting;
+    },
+    runCancelling() {
+      return runStore.cancelling;
     }
   },
   watch: {
@@ -537,12 +558,13 @@ export default {
       try {
         let response;
         if (this.currentProject) {
-          response = await axios.put(`http://localhost:5000/projects/${this.projectId}`, payload);
+          response = await updateProject(this.projectId, payload);
         } else {
-          response = await axios.post('http://localhost:5000/projects', payload);
+          response = await createProject(payload);
         }
         if (response.data.success) {
           this.currentProject = response.data.project;
+          setCurrentProject(this.currentProject);
           this.projectDialogVisible = false;
           this.$message.success(this.pendingLegacyProjectState ? '工程已创建，正在导入旧项目数据' : '工程上下文已保存');
           if (this.pendingLegacyProjectState) {
@@ -562,12 +584,14 @@ export default {
     async ensureBackendProject(project) {
       if (!project || !project.project_id) throw new Error('项目文件缺少 project_id');
       try {
-        const createRes = await axios.post('http://localhost:5000/projects', project);
+        const createRes = await createProject(project);
         this.currentProject = createRes.data.project;
+        setCurrentProject(this.currentProject);
       } catch (err) {
         if (err.response && err.response.status === 409) {
-          const updateRes = await axios.put(`http://localhost:5000/projects/${project.project_id}`, project);
+          const updateRes = await updateProject(project.project_id, project);
           this.currentProject = updateRes.data.project;
+          setCurrentProject(this.currentProject);
         } else {
           throw err;
         }
@@ -622,6 +646,7 @@ export default {
     applyNormalizedGeologyModel(model) {
       if (!model) return;
       this.currentGeologyModel = model;
+      setGeologyModel(model);
       this.clearGridModelState();
       const formations = (model.stratigraphy && model.stratigraphy.formations) || [];
       this.layerMapping = {};
@@ -641,6 +666,7 @@ export default {
       this.gridQuality = {};
       this.gridRenderCells = [];
       this.activeGridModelId = null;
+      resetGridStore();
       if (clearPoints) {
         this.resultPoints = [];
         this.currentRun = null;
@@ -678,16 +704,16 @@ export default {
       this.currentGridModel = model;
       this.activeGridModelId = model.grid_model_id;
       this.gridQuality = model.quality || {};
+      setGridModel(model);
       this.invalidateFlowModel();
       if (this.currentProject) {
         const references = { ...(this.currentProject.references || {}), grid_model_id: model.grid_model_id };
         this.currentProject = { ...this.currentProject, references };
+        updateProjectReferences(references);
       }
     },
     async loadGridRenderData(gridModelId) {
-      const response = await axios.get(
-        `http://localhost:5000/projects/${this.projectId}/grids/${gridModelId}/render-data`
-      );
+      const response = await getGridRenderData(this.projectId, gridModelId);
       if (response.data.success) {
         this.gridRenderCells = response.data.points || [];
         this.resultPoints = response.data.points || [];
@@ -704,15 +730,9 @@ export default {
     },
     async persistGeologyModelToBackend(model) {
       if (!this.ensureProjectContext('导入地质体模型')) return null;
-      const validateRes = await axios.post(
-        `http://localhost:5000/projects/${this.projectId}/geology-models/validate`,
-        model
-      );
+      const validateRes = await validateGeologyModel(this.projectId, model);
       const normalized = validateRes.data.geology_model;
-      const createRes = await axios.post(
-        `http://localhost:5000/projects/${this.projectId}/geology-models`,
-        normalized
-      );
+      const createRes = await createGeologyModel(this.projectId, normalized);
       const saved = createRes.data.geology_model;
       this.applyNormalizedGeologyModel(saved);
       return saved;
@@ -815,7 +835,7 @@ export default {
       const formData = new FormData();
       formData.append('file', blob, 'recovered_boreholes.csv');
       formData.append('project_id', this.projectId);
-      const response = await axios.post('http://localhost:5000/upload-boreholes', formData);
+      const response = await uploadBoreholes(formData);
       if (response.data && response.data.geology_model) {
         this.applyNormalizedGeologyModel(response.data.geology_model);
       }
@@ -1040,10 +1060,7 @@ export default {
         return;
       }
       try {
-        const res = await axios.post(
-          `http://localhost:5000/projects/${this.projectId}/grids`,
-          this.buildGridApiConfig()
-        );
+        const res = await createGrid(this.projectId, this.buildGridApiConfig());
         if (res.data.success) {
           this.applyGridModel(res.data.grid_model);
           await this.loadGridRenderData(res.data.grid_model_id);
@@ -1082,6 +1099,7 @@ export default {
       this.currentFlowModel = null;
       this.flowCheck = null;
       this.packagePreview = null;
+      resetFlowStore();
     },
 
     onGridClicked(data) {
@@ -1206,96 +1224,27 @@ export default {
     },
 
     buildFlowModelPayload(partialParams = {}) {
-      const geometry = this.currentGridModel && this.currentGridModel.geometry ? this.currentGridModel.geometry : {};
-      const nlay = Number(geometry.nlay || this.gridConfig.n_layers || 1);
-      const kx = Number(partialParams.kx_default ?? partialParams.k ?? this.flowSettings.kx_default);
-      const ky = Number(partialParams.ky_default ?? partialParams.k ?? this.flowSettings.ky_default);
-      const kz = Number(partialParams.kz_default ?? this.flowSettings.kz_default);
-      const initialHead = Number(partialParams.initial_head_default ?? this.flowSettings.initial_head_default);
-      const icelltype = Number(partialParams.icelltype ?? this.flowSettings.icelltype);
-      this.flowSettings = {
-        initial_head_default: initialHead,
-        kx_default: kx,
-        ky_default: ky,
-        kz_default: kz,
-        icelltype
-      };
-      const kOverrides = this.kCells
-        .filter(cell => cell.cell_id)
-        .map(cell => ({ cell_id: cell.cell_id, value: Number(cell.k_val) }));
-      return {
-        project_id: this.projectId,
-        grid_model_id: this.activeGridModelId,
-        simulation: {
-          type: 'steady',
-          stress_periods: [{ perlen: 1.0, nstp: 1, tsmult: 1.0, steady: true }],
-          time_units: 'DAYS'
-        },
-        initial_conditions: {
-          mode: 'default_with_overrides',
-          default: initialHead,
-          overrides: []
-        },
-        hydraulic_properties: {
-          icelltype: { mode: 'per_layer', values: Array.from({ length: nlay }, () => icelltype) },
-          kx: { default: kx, overrides: kOverrides },
-          ky: { default: ky, overrides: kOverrides },
-          kz: { default: kz, overrides: kOverrides }
-        },
-        boundaries: {
-          chd: this.chdCells.length > 0 ? [{
-            boundary_id: 'selected_chd_cells',
-            name: 'Selected CHD cells',
-            cells: this.chdCells
-              .filter(cell => cell.cell_id)
-              .map(cell => ({ cell_id: cell.cell_id, head: Number(cell.head) }))
-          }] : [],
-          wel: this.wells
-            .filter(cell => cell.cell_id)
-            .map((cell, index) => ({
-              well_id: `well_${index + 1}`,
-              name: `Well ${index + 1}`,
-              cell_id: cell.cell_id,
-              rate: Number(cell.rate)
-            })),
-          riv: this.rivCells.length > 0 ? [{
-            boundary_id: 'selected_riv_cells',
-            name: 'Selected RIV cells',
-            cells: this.rivCells
-              .filter(cell => cell.cell_id)
-              .map(cell => ({
-                cell_id: cell.cell_id,
-                stage: Number(cell.stage),
-                conductance: Number(cell.conductance),
-                river_bottom: Number(cell.river_bottom)
-              }))
-          }] : []
-        },
-        solver: {
-          complexity: 'COMPLEX',
-          outer_maximum: 100,
-          inner_maximum: 100,
-          outer_dvclose: 1.0e-8,
-          inner_dvclose: 1.0e-8,
-          linear_acceleration: 'BICGSTAB'
-        },
-        output_control: {
-          save_head: true,
-          save_budget: true,
-          print_budget: true,
-          head_file: 'gwf.hds',
-          budget_file: 'gwf.bud'
-        }
-      };
+      const built = buildFormalFlowModelPayload({
+        projectId: this.projectId,
+        gridModelId: this.activeGridModelId,
+        currentGridModel: this.currentGridModel,
+        gridConfig: this.gridConfig,
+        flowSettings: this.flowSettings,
+        partialParams,
+        wells: this.wells,
+        kCells: this.kCells,
+        chdCells: this.chdCells,
+        rivCells: this.rivCells
+      });
+      this.flowSettings = built.flowSettings;
+      return built.payload;
     },
 
     async saveFlowModelToBackend(partialParams = {}) {
       const payload = this.buildFlowModelPayload(partialParams);
-      const validateRes = await axios.post(
-        `http://localhost:5000/projects/${this.projectId}/flow-models/validate`,
-        payload
-      );
+      const validateRes = await validateFlowModel(this.projectId, payload);
       this.flowCheck = validateRes.data.checker;
+      setFlowChecker(this.flowCheck);
       if (!this.flowCheck || !this.flowCheck.runnable) {
         const errors = this.flowCheck && this.flowCheck.diagnostics ? this.flowCheck.diagnostics.errors || [] : [];
         this.currentLogs = errors.map(item => `${item.code}: ${item.message}`).join('\n');
@@ -1303,21 +1252,20 @@ export default {
         return null;
       }
       const response = this.currentFlowModel && this.currentFlowModel.flow_model_id
-        ? await axios.put(
-          `http://localhost:5000/projects/${this.projectId}/flow-models/${this.currentFlowModel.flow_model_id}`,
-          payload
-        )
-        : await axios.post(`http://localhost:5000/projects/${this.projectId}/flow-models`, payload);
+        ? await updateFlowModel(this.projectId, this.currentFlowModel.flow_model_id, payload)
+        : await createFlowModel(this.projectId, payload);
       this.currentFlowModel = response.data.flow_model;
       this.flowCheck = response.data.checker;
+      setFlowModel(this.currentFlowModel, this.flowCheck, this.packagePreview);
       if (this.currentProject && this.currentFlowModel) {
         const references = { ...(this.currentProject.references || {}), flow_model_id: this.currentFlowModel.flow_model_id };
         this.currentProject = { ...this.currentProject, references };
+        updateProjectReferences(references);
       }
-      const preview = await axios.get(
-        `http://localhost:5000/projects/${this.projectId}/flow-models/${this.currentFlowModel.flow_model_id}/package-preview`
-      );
+      const preview = await getPackagePreview(this.projectId, this.currentFlowModel.flow_model_id);
       this.packagePreview = preview.data.package_preview;
+      setPackagePreview(this.packagePreview);
+      setFlowModel(this.currentFlowModel, this.flowCheck, this.packagePreview);
       return this.currentFlowModel;
     },
 
@@ -1341,7 +1289,7 @@ export default {
     async loadRunHistory() {
       if (!this.projectId) return;
       try {
-        const res = await axios.get(`http://localhost:5000/projects/${this.projectId}/runs?limit=10`);
+        const res = await listRuns(this.projectId, { limit: 10 });
         if (res.data.success) {
           this.runHistory = res.data.runs || [];
           if (!this.currentRun && this.runHistory.length > 0) {
@@ -1356,7 +1304,7 @@ export default {
     async selectRunSummary(row) {
       if (!row || !row.run_id || !this.projectId) return;
       try {
-        const res = await axios.get(`http://localhost:5000/projects/${this.projectId}/runs/${row.run_id}/summary`);
+        const res = await getRunSummary(this.projectId, row.run_id);
         if (res.data.success) {
           this.currentRun = res.data.run;
           this.currentLogs = this.formatRunSummary(this.currentRun);
@@ -1388,6 +1336,42 @@ export default {
       ].filter(Boolean).join('\n');
     },
 
+    async applyHeadSliceToViewer(runId) {
+      if (!runId || !this.gridRenderCells || this.gridRenderCells.length === 0) {
+        this.resultPoints = [];
+        return;
+      }
+      try {
+        const response = await getHeadSlice(this.projectId, runId, {
+          layer: 0,
+          time_index: -1,
+          format: 'json'
+        });
+        const values = response.data.values || [];
+        this.resultPoints = this.gridRenderCells.map(cell => {
+          if (cell.layer !== 0) return cell;
+          const row = Number(cell.row || 0);
+          const column = Number(cell.column !== undefined ? cell.column : cell.col || 0);
+          const rowValues = values[row] || [];
+          return { ...cell, head: rowValues[column] };
+        });
+      } catch (err) {
+        this.resultPoints = this.gridRenderCells.slice();
+        this.$message.warning('Head slice loading failed; showing grid geometry only.');
+      }
+    },
+
+    async handleCancelRun() {
+      if (!this.currentRun || !this.currentRun.run_id) return;
+      try {
+        const run = await requestRunCancel(this.projectId, this.currentRun.run_id, 'user requested cancel');
+        this.currentRun = run || this.currentRun;
+        this.currentLogs = this.formatRunSummary(this.currentRun);
+      } catch (err) {
+        this.$message.error('Cancel failed: ' + (err.response?.data?.error || err.message));
+      }
+    },
+
     async handleRun(partialParams, mpCell = null) {
       if (!this.ensureProjectContext('运行模型')) return;
       if (!this.activeGridModelId) {
@@ -1407,9 +1391,22 @@ export default {
         if (mpCell) {
           this.$message.info('当前正式 Run API 尚未接入 MODPATH，先执行地下水流场运行');
         }
-        const res = await axios.post(`http://localhost:5000/projects/${this.projectId}/runs`, {
-          flow_model_id: flowModel.flow_model_id
-        });
+        const res = {
+          data: {
+            success: true,
+            status: null,
+            run: await submitAndPollRun(this.projectId, flowModel.flow_model_id, {
+              idempotencyKey: `${this.projectId}:${flowModel.flow_model_id}`
+            }),
+            points: [],
+            pathlines: []
+          }
+        };
+        res.data.status = res.data.run.status;
+        if (['completed', 'completed_with_warnings'].includes(res.data.status)) {
+          await this.applyHeadSliceToViewer(res.data.run.run_id);
+          res.data.points = this.resultPoints;
+        }
 
         this.currentRun = res.data.run || null;
         this.currentLogs = res.data.logs || this.formatRunSummary(this.currentRun);

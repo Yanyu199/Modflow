@@ -1,3 +1,18 @@
+# 2026-07-13 Stability And Scalable Runtime Update
+
+Runtime capabilities added before more package work:
+
+| Capability | Current status | Classification |
+|---|---|---|
+| Async formal run submission | `POST /projects/<project_id>/runs` returns `202` and `run_id`; worker executes MF6. | Implemented for first steady-flow scope |
+| Run cancellation | API marks `cancel_requested`; worker terminates MF6 process tree while running. | Implemented with local executor |
+| Timeout | Configurable timeout terminates MF6 and marks `timed_out`. | Implemented with local executor |
+| Restart recovery | Non-terminal active worker states become `interrupted` on API startup. | Implemented |
+| Result slicing | Head variables can be read by layer/time/range as JSON or binary. | Implemented for head; budget summary available |
+| Resource protection | Preflight estimates cells/result bytes and rejects too-large runs before major allocation. | Partially implemented |
+| Frontend state layering | API modules, lightweight stores, and package registry exist. | Partially implemented |
+| GPU acceleration | Optional array backend; CPU fallback; no GPU MF6 solver. | Partially implemented |
+
 # 2026-07-13 RIV Boundary v1 Update
 
 RIV has moved from "not implemented in formal Flow Model" to "implemented for first steady-flow scope" as a cell-based package. Remaining RIV gaps are conceptual line/river-network mapping, transient period data, import tooling, and richer UI workflows. DRN, GHB, RCH, and EVT remain the next source/sink package gaps.
