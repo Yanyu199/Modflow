@@ -1,3 +1,20 @@
+# 2026-07-13 Flow Model v1 Update
+
+Resolved or reduced:
+
+- The formal `flow_model_v1` now exists for single-period steady-flow IC, NPF, CHD, WEL, IMS, and OC.
+- Normal frontend runs no longer send legacy IC/K/CHD/WEL data directly in the `/run-model` body.
+- Formal runs use the saved Flow Model and backend Grid Store as the authority.
+- A Flow Model benchmark now validates heads, total inflow, total outflow, and percent discrepancy through the formal data chain.
+
+Remaining high-priority debt:
+
+- No `run_manifest_v1` or persistent run history yet.
+- Main application run responses still do not provide a structured water-balance/convergence report.
+- RIV, DRN, GHB, RCH, and EVT are not part of the formal Flow Model.
+- MODPATH executable configuration is still out of scope for this update.
+- The legacy `/run-model` adapter remains behind `allow_legacy_flow_model=true` and should be removed after remaining packages are migrated.
+
 # Technical Debt
 
 本文按数值正确性、架构、安全、并发、性能和可维护性分类。严重程度为当前审计判断，后续应由测试和运行验证修正。

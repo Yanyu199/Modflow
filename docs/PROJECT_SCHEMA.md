@@ -1,3 +1,7 @@
+# 2026-07-13 Flow Model Reference
+
+`project.references.flow_model_id` is now used by the active `flow_model_v1`. The reference is updated when a valid Flow Model is saved through `FlowModelStore`, while existing `geology_model_id` and `grid_model_id` references are preserved.
+
 # Project Schema
 
 更新日期：2026-07-13

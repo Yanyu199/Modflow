@@ -233,7 +233,12 @@ def test_geology_update_marks_active_grid_stale_and_run_model_rejects_it(tmp_pat
 
     run = client.post(
         "/run-model",
-        json={"project_id": project["project_id"], "grid_model_id": grid_model_id, "params": {}},
+        json={
+            "project_id": project["project_id"],
+            "grid_model_id": grid_model_id,
+            "params": {},
+            "allow_legacy_flow_model": True,
+        },
     )
     assert run.status_code == 400
     assert run.get_json()["code"] == "grid_model_validation_error"
@@ -272,6 +277,7 @@ def test_run_model_requires_grid_store_and_normalizes_legacy_cell_selection(tmp_
             "project_id": project["project_id"],
             "grid_model_id": grid_model_id,
             "params": {},
+            "allow_legacy_flow_model": True,
             "wells": [{"layer": 0, "row": 0, "col": 0, "rate": -100.0}],
             "k_cells": [{"cell_id": cell_id(grid_model_id, 0, 0, 1), "k_val": 10.0}],
         },
@@ -288,6 +294,7 @@ def test_run_model_requires_grid_store_and_normalizes_legacy_cell_selection(tmp_
             "project_id": project["project_id"],
             "grid_model_id": grid_model_id,
             "params": {},
+            "allow_legacy_flow_model": True,
             "wells": [{"row": 0, "rate": -1.0}],
         },
     )

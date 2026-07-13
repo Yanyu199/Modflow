@@ -65,6 +65,7 @@
             :configuredData="boundaryConfigs" 
             :wells="wells" 
             :kCells="kCells"
+            :chdCells="chdCells"
             :faults="faults"
             :gridCells="gridRenderCells"
             :projectId="projectId"
@@ -145,6 +146,7 @@
             :configuredData="boundaryConfigs"
             :wells="wells"
             :kCells="kCells"
+            :chdCells="chdCells"
             :faults="faults"
             :gridCells="gridRenderCells"
             :projectId="projectId"
@@ -235,6 +237,10 @@
           :gridConfig.sync="gridConfig" 
           :wells="wells"
           :kCells="kCells"
+          :chdCells="chdCells"
+          :flowCheck="flowCheck"
+          :packagePreview="packagePreview"
+          :canRunFlow="canRunFlow"
           :currentSegmentIdx="currentSegmentIdx"
           :boundaryConfigs="boundaryConfigs"
           :loading="loading"
@@ -250,6 +256,7 @@
           @type-change="handleAttributeTypeChange"
           @clear-all="handleClearAllAttributes"
           @update-rch-evt="handleRchEvtUpdate"
+          @save-flow="handleSaveFlowModel"
           @save-boundary="onBoundaryConfigSave"
           @remove-boundary="onBoundaryConfigRemove"
           @run="handleRun"
@@ -276,6 +283,7 @@
             <el-radio-group v-model="tempCell.type">
               <el-radio label="well">水井</el-radio>
               <el-radio label="k_cell">变K</el-radio>
+              <el-radio label="chd">CHD</el-radio>
             </el-radio-group>
           </el-form-item>
           <div v-if="tempCell.type === 'well'">
@@ -283,6 +291,9 @@
           </div>
           <div v-if="tempCell.type === 'k_cell'">
              <el-form-item label="渗透系数 K"><el-input-number v-model="tempCell.k_val" :step="0.1" style="width: 100%"></el-input-number></el-form-item>
+          </div>
+          <div v-if="tempCell.type === 'chd'">
+             <el-form-item label="定水头 Head"><el-input-number v-model="tempCell.head" :step="0.1" style="width: 100%"></el-input-number></el-form-item>
           </div>
         </el-form>
       </div>
@@ -356,6 +367,17 @@ export default {
       boundaryConfigs: {}, 
       wells: [], 
       kCells: [], 
+      chdCells: [],
+      currentFlowModel: null,
+      flowCheck: null,
+      packagePreview: null,
+      flowSettings: {
+        initial_head_default: 9.5,
+        kx_default: 10.0,
+        ky_default: 10.0,
+        kz_default: 1.0,
+        icelltype: 0
+      },
       dialogVisible: false, 
       tempCell: null,
       rchData: [], 
@@ -379,6 +401,7 @@ export default {
         || this.faults.length > 0
         || this.wells.length > 0
         || this.kCells.length > 0
+        || this.chdCells.length > 0
         || Object.keys(this.boundaryConfigs).length > 0
         || this.resultPoints.length > 0
       );
@@ -421,6 +444,14 @@ export default {
       const active = this.gridQuality.summary ? this.gridQuality.summary.active_cell_count : null;
       const base = `${geometry.nlay} 层 x ${geometry.nrow} 行 x ${geometry.ncol} 列`;
       return active === null || active === undefined ? base : `${base}，活动单元 ${active}`;
+    },
+    canRunFlow() {
+      return Boolean(
+        this.currentFlowModel
+        && this.flowCheck
+        && this.flowCheck.runnable
+        && !this.hasBlockingGridErrors
+      );
     }
   },
   watch: {
@@ -429,7 +460,10 @@ export default {
         this.activeStep = '4';
       }
       this.syncVisibleMap();
-    }
+    },
+    wells: { deep: true, handler() { this.invalidateFlowModel(); } },
+    kCells: { deep: true, handler() { this.invalidateFlowModel(); } },
+    chdCells: { deep: true, handler() { this.invalidateFlowModel(); } }
   },
   mounted() {
     if (!this.currentProject) {
@@ -553,6 +587,7 @@ export default {
       this.gridRenderCells = [];
       this.activeGridModelId = null;
       if (clearPoints) this.resultPoints = [];
+      this.invalidateFlowModel();
     },
     buildGridApiConfig() {
       const cfg = this.gridConfig || {};
@@ -585,6 +620,7 @@ export default {
       this.currentGridModel = model;
       this.activeGridModelId = model.grid_model_id;
       this.gridQuality = model.quality || {};
+      this.invalidateFlowModel();
       if (this.currentProject) {
         const references = { ...(this.currentProject.references || {}), grid_model_id: model.grid_model_id };
         this.currentProject = { ...this.currentProject, references };
@@ -630,6 +666,8 @@ export default {
       if (state.boundaryConfigs) this.boundaryConfigs = state.boundaryConfigs;
       if (state.wells) this.wells = state.wells;
       if (state.kCells) this.kCells = state.kCells;
+      if (state.chdCells) this.chdCells = state.chdCells;
+      if (state.flowSettings) this.flowSettings = { ...this.flowSettings, ...state.flowSettings };
       if (state.rchData) this.rchData = state.rchData;
       if (state.evtData) this.evtData = state.evtData;
       if (state.layerMapping) this.layerMapping = state.layerMapping;
@@ -747,6 +785,8 @@ export default {
           boundaryConfigs: this.boundaryConfigs,
           wells: this.wells,
           kCells: this.kCells,
+          chdCells: this.chdCells,
+          flowSettings: this.flowSettings,
           rchData: this.rchData,
           evtData: this.evtData,
           activeGridModelId: this.activeGridModelId
@@ -772,6 +812,8 @@ export default {
             this.boundaryConfigs = {};
             this.wells = [];
             this.kCells = [];
+            this.chdCells = [];
+            this.invalidateFlowModel();
             this.rchData = [];
             this.evtData = [];
             this.resultPoints = [];
@@ -800,6 +842,8 @@ export default {
           this.boundaryConfigs = {};
           this.wells = [];
           this.kCells = [];
+          this.chdCells = [];
+          this.invalidateFlowModel();
           this.rchData = [];
           this.evtData = [];
           this.resultPoints = [];
@@ -883,7 +927,8 @@ export default {
         this.boundary = payload.coords || [];
         if (payload.geology_model) this.applyNormalizedGeologyModel(payload.geology_model);
         else this.clearGridModelState();
-        this.wells = []; this.kCells = []; this.resultPoints = [];
+        this.wells = []; this.kCells = []; this.chdCells = []; this.resultPoints = [];
+        this.invalidateFlowModel();
         this.$message.success("边界加载成功");
     },
 
@@ -903,10 +948,10 @@ export default {
     async onPreviewGrid(payload) {
       if (!this.ensureProjectContext('预览网格')) return;
       this.gridConfig = { ...this.gridConfig, ...((payload && payload.config) || {}) };
-      if (this.activeGridModelId && (this.wells.length > 0 || this.kCells.length > 0)) {
+      if (this.activeGridModelId && (this.wells.length > 0 || this.kCells.length > 0 || this.chdCells.length > 0)) {
         try {
           await this.$confirm(
-            '重新生成 Grid Model 会产生新的 cell_id，当前井和变 K 单元选择将被清空。是否继续？',
+            '重新生成 Grid Model 会产生新的 cell_id，当前 WEL、CHD 和 K 单元选择将被清空。是否继续？',
             '重新生成网格',
             { type: 'warning' }
           );
@@ -915,6 +960,8 @@ export default {
         }
         this.wells = [];
         this.kCells = [];
+        this.chdCells = [];
+        this.invalidateFlowModel();
       }
       await this.fetchGridPreview();
     },
@@ -964,6 +1011,12 @@ export default {
       return a.row === b.row && a.col === b.col && (a.layer || 0) === (b.layer || 0);
     },
 
+    invalidateFlowModel() {
+      this.currentFlowModel = null;
+      this.flowCheck = null;
+      this.packagePreview = null;
+    },
+
     onGridClicked(data) {
       if (this.activePage !== 'flow') return;
       if (!data || !data.cell_id) {
@@ -973,14 +1026,16 @@ export default {
       const probe = { ...data, layer: data.layer || 0 };
       const existingWell = this.wells.find(w => this.isSameGridCell(w, probe));
       const existingK = this.kCells.find(k => this.isSameGridCell(k, probe));
+      const existingChd = this.chdCells.find(c => this.isSameGridCell(c, probe));
       this.tempCell = {
         cell_id: data.cell_id,
         grid_model_id: data.grid_model_id || this.activeGridModelId,
         row: data.row, col: data.col, column: data.column !== undefined ? data.column : data.col, x: data.x, y: data.y,
-        layer: existingWell ? (existingWell.layer || 0) : (existingK ? (existingK.layer || 0) : 0),
-        type: existingK ? 'k_cell' : 'well', 
+        layer: existingWell ? (existingWell.layer || 0) : (existingK ? (existingK.layer || 0) : (existingChd ? (existingChd.layer || 0) : 0)),
+        type: existingChd ? 'chd' : (existingK ? 'k_cell' : 'well'),
         rate: existingWell ? existingWell.rate : -1000,
-        k_val: existingK ? existingK.k_val : 10.0
+        k_val: existingK ? existingK.k_val : 10.0,
+        head: existingChd ? existingChd.head : 10.0
       };
       this.dialogVisible = true;
       this.activeStep = '4';
@@ -989,16 +1044,21 @@ export default {
       const target = this.tempCell;
       this.wells = this.wells.filter(w => !this.isSameGridCell(w, target));
       this.kCells = this.kCells.filter(k => !this.isSameGridCell(k, target));
+      this.chdCells = this.chdCells.filter(c => !this.isSameGridCell(c, target));
+      this.invalidateFlowModel();
       this.dialogVisible = false;
     },
     saveCellProperty() {
-      const { cell_id, grid_model_id, row, col, column, type, rate, k_val, layer, x, y } = this.tempCell;
+      const { cell_id, grid_model_id, row, col, column, type, rate, k_val, head, layer, x, y } = this.tempCell;
       const target = { cell_id, row, col, layer };
       this.wells = this.wells.filter(w => !this.isSameGridCell(w, target));
       this.kCells = this.kCells.filter(k => !this.isSameGridCell(k, target));
+      this.chdCells = this.chdCells.filter(c => !this.isSameGridCell(c, target));
       const base = { cell_id, grid_model_id, row, col, column: column !== undefined ? column : col, layer, x, y };
       if (type === 'well') this.wells.push({ ...base, rate });
-      else this.kCells.push({ ...base, k_val });
+      else if (type === 'k_cell') this.kCells.push({ ...base, k_val });
+      else this.chdCells.push({ ...base, head });
+      this.invalidateFlowModel();
       this.dialogVisible = false;
     },
 
@@ -1012,14 +1072,18 @@ export default {
     
     handleAttributeDelete(target) {
       if (target.type === 'well') this.wells = this.wells.filter(w => !this.isSameGridCell(w, target));
-      else this.kCells = this.kCells.filter(k => !this.isSameGridCell(k, target));
+      else if (target.type === 'k_cell') this.kCells = this.kCells.filter(k => !this.isSameGridCell(k, target));
+      else this.chdCells = this.chdCells.filter(c => !this.isSameGridCell(c, target));
+      this.invalidateFlowModel();
     },
-    handleClearAllAttributes() { this.wells = []; this.kCells = []; },
+    handleClearAllAttributes() { this.wells = []; this.kCells = []; this.chdCells = []; this.invalidateFlowModel(); },
     handleAttributeTypeChange(rowData) {
       const { newType } = rowData;
-      const sourceList = newType === 'well' ? this.kCells : this.wells;
-      const source = sourceList.find(item => this.isSameGridCell(item, rowData)) || rowData;
-      this.handleAttributeDelete({ ...rowData, type: newType === 'well' ? 'k_cell' : 'well' });
+      const source = this.wells.find(item => this.isSameGridCell(item, rowData))
+        || this.kCells.find(item => this.isSameGridCell(item, rowData))
+        || this.chdCells.find(item => this.isSameGridCell(item, rowData))
+        || rowData;
+      this.handleAttributeDelete({ ...rowData, type: rowData.type });
       const base = {
         cell_id: source.cell_id,
         grid_model_id: source.grid_model_id || this.activeGridModelId,
@@ -1031,7 +1095,9 @@ export default {
         y: source.y
       };
       if (newType === 'well') this.wells.push({ ...base, rate: -1000 });
-      else this.kCells.push({ ...base, k_val: 10.0 });
+      else if (newType === 'k_cell') this.kCells.push({ ...base, k_val: 10.0 });
+      else this.chdCells.push({ ...base, head: 10.0 });
+      this.invalidateFlowModel();
     },
     handleRchEvtUpdate(data) {
       this.rchData = data.rch;
@@ -1040,6 +1106,127 @@ export default {
 
     onParticleTraceRequested(cell) {
       this.handleRun({ k: 10.0 }, cell);
+    },
+
+    buildFlowModelPayload(partialParams = {}) {
+      const geometry = this.currentGridModel && this.currentGridModel.geometry ? this.currentGridModel.geometry : {};
+      const nlay = Number(geometry.nlay || this.gridConfig.n_layers || 1);
+      const kx = Number(partialParams.kx_default ?? partialParams.k ?? this.flowSettings.kx_default);
+      const ky = Number(partialParams.ky_default ?? partialParams.k ?? this.flowSettings.ky_default);
+      const kz = Number(partialParams.kz_default ?? this.flowSettings.kz_default);
+      const initialHead = Number(partialParams.initial_head_default ?? this.flowSettings.initial_head_default);
+      const icelltype = Number(partialParams.icelltype ?? this.flowSettings.icelltype);
+      this.flowSettings = {
+        initial_head_default: initialHead,
+        kx_default: kx,
+        ky_default: ky,
+        kz_default: kz,
+        icelltype
+      };
+      const kOverrides = this.kCells
+        .filter(cell => cell.cell_id)
+        .map(cell => ({ cell_id: cell.cell_id, value: Number(cell.k_val) }));
+      return {
+        project_id: this.projectId,
+        grid_model_id: this.activeGridModelId,
+        simulation: {
+          type: 'steady',
+          stress_periods: [{ perlen: 1.0, nstp: 1, tsmult: 1.0, steady: true }],
+          time_units: 'DAYS'
+        },
+        initial_conditions: {
+          mode: 'default_with_overrides',
+          default: initialHead,
+          overrides: []
+        },
+        hydraulic_properties: {
+          icelltype: { mode: 'per_layer', values: Array.from({ length: nlay }, () => icelltype) },
+          kx: { default: kx, overrides: kOverrides },
+          ky: { default: ky, overrides: kOverrides },
+          kz: { default: kz, overrides: kOverrides }
+        },
+        boundaries: {
+          chd: this.chdCells.length > 0 ? [{
+            boundary_id: 'selected_chd_cells',
+            name: 'Selected CHD cells',
+            cells: this.chdCells
+              .filter(cell => cell.cell_id)
+              .map(cell => ({ cell_id: cell.cell_id, head: Number(cell.head) }))
+          }] : [],
+          wel: this.wells
+            .filter(cell => cell.cell_id)
+            .map((cell, index) => ({
+              well_id: `well_${index + 1}`,
+              name: `Well ${index + 1}`,
+              cell_id: cell.cell_id,
+              rate: Number(cell.rate)
+            }))
+        },
+        solver: {
+          complexity: 'COMPLEX',
+          outer_maximum: 100,
+          inner_maximum: 100,
+          outer_dvclose: 1.0e-8,
+          inner_dvclose: 1.0e-8,
+          linear_acceleration: 'BICGSTAB'
+        },
+        output_control: {
+          save_head: true,
+          save_budget: true,
+          print_budget: true,
+          head_file: 'gwf.hds',
+          budget_file: 'gwf.bud'
+        }
+      };
+    },
+
+    async saveFlowModelToBackend(partialParams = {}) {
+      const payload = this.buildFlowModelPayload(partialParams);
+      const validateRes = await axios.post(
+        `http://localhost:5000/projects/${this.projectId}/flow-models/validate`,
+        payload
+      );
+      this.flowCheck = validateRes.data.checker;
+      if (!this.flowCheck || !this.flowCheck.runnable) {
+        const errors = this.flowCheck && this.flowCheck.diagnostics ? this.flowCheck.diagnostics.errors || [] : [];
+        this.currentLogs = errors.map(item => `${item.code}: ${item.message}`).join('\n');
+        this.$message.error('Flow Model 检查未通过，请先补齐 CHD/WEL/K/IC 配置');
+        return null;
+      }
+      const response = this.currentFlowModel && this.currentFlowModel.flow_model_id
+        ? await axios.put(
+          `http://localhost:5000/projects/${this.projectId}/flow-models/${this.currentFlowModel.flow_model_id}`,
+          payload
+        )
+        : await axios.post(`http://localhost:5000/projects/${this.projectId}/flow-models`, payload);
+      this.currentFlowModel = response.data.flow_model;
+      this.flowCheck = response.data.checker;
+      if (this.currentProject && this.currentFlowModel) {
+        const references = { ...(this.currentProject.references || {}), flow_model_id: this.currentFlowModel.flow_model_id };
+        this.currentProject = { ...this.currentProject, references };
+      }
+      const preview = await axios.get(
+        `http://localhost:5000/projects/${this.projectId}/flow-models/${this.currentFlowModel.flow_model_id}/package-preview`
+      );
+      this.packagePreview = preview.data.package_preview;
+      return this.currentFlowModel;
+    },
+
+    async handleSaveFlowModel(partialParams) {
+      if (!this.ensureProjectContext('保存 Flow Model')) return;
+      if (!this.activeGridModelId || this.hasBlockingGridErrors) {
+        this.$message.warning('请先生成可运行的 Grid Model');
+        return;
+      }
+      this.loading = true;
+      try {
+        const model = await this.saveFlowModelToBackend(partialParams);
+        if (model) this.$message.success('Flow Model 已保存并通过检查');
+      } catch (err) {
+        this.$message.error('Flow Model 保存失败: ' + (err.response?.data?.error || err.message));
+      } finally {
+        this.loading = false;
+      }
     },
 
     async handleRun(partialParams, mpCell = null) {
@@ -1055,32 +1242,14 @@ export default {
       this.loading = true;
       this.currentLogs = '';
       
-      const boundaryList = [];
-      for (const [idxStr, cfg] of Object.entries(this.boundaryConfigs)) {
-        if (this.boundary && this.boundary[idxStr]) {
-          boundaryList.push({ 
-            p1: this.boundary[idxStr], 
-            p2: this.boundary[parseInt(idxStr)+1], 
-            ...cfg 
-          });
-        }
-      }
-      
-      const fullParams = { ...partialParams, ...this.gridConfig };
-      
       try {
+        const flowModel = await this.saveFlowModelToBackend(partialParams);
+        if (!flowModel) return;
         const res = await axios.post('http://localhost:5000/run-model', {
           project_id: this.projectId, 
           grid_model_id: this.activeGridModelId,
-          boundary: this.boundary, 
-          params: fullParams, 
-          boundary_conditions: boundaryList, 
-          wells: this.wells, 
-          k_cells: this.kCells,
-          rch_data: this.rchData,
-          evt_data: this.evtData,
-          mp_start_cell: mpCell,
-          faults: this.faults // 在引擎计算时包含断层
+          flow_model_id: flowModel.flow_model_id,
+          mp_start_cell: mpCell
         });
         
         if (res.data.success) { 

@@ -202,3 +202,63 @@ $env:FLOPY_KEEP_SUCCESSFUL_RUNS="1"
 ```
 
 未设置时，主应用成功运行会清理目录，benchmark 测试会主动保留目录。
+## Persistent Flow Model Benchmark
+
+Updated: 2026-07-13
+
+The original benchmark still exists and directly constructs a FloPy simulation. A second benchmark now verifies the formal application data path:
+
+```text
+ProjectStore
+-> GridModelStore fixture
+-> flow_model_v1
+-> Model Checker
+-> Package Compiler
+-> MODFLOW 6
+-> .hds/.bud/.lst validation
+```
+
+Command:
+
+```powershell
+cd backend
+python -m pytest tests/test_flow_model.py::test_persistent_flow_model_benchmark_runs_and_matches -vv
+```
+
+This benchmark uses the same 1-layer, 1-row, 5-column model:
+
+- `delr = 100 m`
+- `delc = 100 m`
+- `top = 10 m`
+- `bottom = 0 m`
+- `Kx = Ky = Kz = 1 m/day`
+- `icelltype = 0`
+- left CHD = 10 m
+- right CHD = 9 m
+- center WEL = -1 m3/day
+- initial head = 9.5 m
+
+Expected heads:
+
+```text
+[[[10.0, 9.7, 9.4, 9.2, 9.0]]]
+```
+
+The test checks package existence, normal termination, finite head values, CHD cell heads, maximum absolute and relative head errors, total inflow, total outflow, and MODFLOW percent discrepancy.
+
+The generated files are retained for this test by calling `FlowModelService.run(..., keep_run_dir=True)`. They are written under `backend/workspace/flow-<flow_model_id>-<run-id>/` and include:
+
+- `mfsim.nam`
+- `sim.tdis`
+- `sim.ims`
+- `gwf.nam`
+- `gwf.dis`
+- `gwf.ic`
+- `gwf.npf`
+- `gwf.chd`
+- `gwf.wel`
+- `gwf.oc`
+- `mfsim.lst`
+- `gwf.lst`
+- `gwf.hds`
+- `gwf.bud`

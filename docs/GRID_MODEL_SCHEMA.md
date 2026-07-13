@@ -1,3 +1,7 @@
+# 2026-07-13 Flow Model Dependency
+
+`flow_model_v1` references Grid Model cells by stable `cell_id`. Regenerating the active Grid Model invalidates previously saved Flow Model cell references, so `GridModelService.create()` marks the active Flow Model stale when a new grid is saved.
+
 # Grid Model Schema
 
 更新日期：2026-07-13

@@ -24,6 +24,7 @@
         <AttributeManager 
           :wells="wells" 
           :kCells="kCells" 
+          :chdCells="chdCells"
           @delete-attribute="(val) => $emit('delete-attribute', val)"
           @type-change="(val) => $emit('type-change', val)" 
           @clear-all="$emit('clear-all')" 
@@ -55,6 +56,10 @@
           :hasResults="resultPoints.length > 0" 
           :resultPoints="resultPoints"
           :logs="currentLogs"
+          :flowCheck="flowCheck"
+          :packagePreview="packagePreview"
+          :canRunFlow="canRunFlow"
+          @save-flow="(val) => $emit('save-flow', val)"
           @run="(val) => $emit('run', val)" 
         />
       </el-collapse-item>
@@ -96,6 +101,10 @@ export default {
     gridConfig: { type: Object, required: true },
     wells: { type: Array, default: () => [] },
     kCells: { type: Array, default: () => [] },
+    chdCells: { type: Array, default: () => [] },
+    flowCheck: { type: Object, default: null },
+    packagePreview: { type: Object, default: null },
+    canRunFlow: { type: Boolean, default: false },
     currentSegmentIdx: { type: Number, default: null },
     boundaryConfigs: { type: Object, default: () => ({}) },
     loading: { type: Boolean, default: false },

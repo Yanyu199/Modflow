@@ -1,3 +1,16 @@
+# 2026-07-13 Flow Model v1 Update
+
+Phase 1 now has a first vertical slice for persistent single-period steady flow:
+
+- `flow_model_v1` schema/store/service.
+- Model Checker for IC, NPF, CHD, WEL, IMS, and OC.
+- Package compiler that builds TDIS, IMS, GWF, DIS, IC, NPF, CHD, WEL, and OC from Grid Store and Flow Store.
+- Formal `/run-model` path based on `flow_model_id`.
+- End-to-end benchmark through Project/Grid/Flow/Checker/Compiler/MF6.
+- Frontend Flow page path: select WEL/K/CHD cells, save/check Flow Model, then run.
+
+The next smallest vertical task is not another boundary package. It should be a `run_manifest_v1` and structured numerical acceptance report that records MF6 executable source, package summary, normal termination, iteration/convergence details, total inflow/outflow, percent discrepancy, retained artifact paths, and result checksums.
+
 # Roadmap
 
 路线图按“先让一个小而可信的 MODFLOW 6 稳定流工作流闭环，再逐步扩展”的原则制定。每个阶段都必须有数值验收，不以页面能打开作为完成标准。

@@ -1,3 +1,20 @@
+# 2026-07-13 Flow Model v1 Update
+
+The first formal steady-flow Flow Model is now partially implemented and should be treated as the authoritative path for IC, NPF, CHD, WEL, IMS, and OC in the normal frontend workflow.
+
+| Capability | Current status after this update | Classification |
+|---|---|---|
+| Persistent Flow Model | `flow_model_v1` is stored in `backend/projects/<project_id>/flow/flow_model.json` and referenced by `project.references.flow_model_id`. | Implemented for first steady-flow scope |
+| IC | `default_with_overrides` and `per_layer` modes are supported; formal path no longer silently uses top elevation as initial head. | Implemented for first steady-flow scope |
+| NPF | Explicit `kx`, `ky`, `kz`, per-layer `icelltype`, and cell overrides are materialized into FloPy NPF. | Implemented for first steady-flow scope |
+| CHD | Cell-based CHD with stable `cell_id`, arbitrary layer support, active-cell validation, and package creation. | Implemented for first steady-flow scope |
+| WEL | Cell-based WEL with stable `cell_id`, arbitrary layer support, sign convention, CHD conflict check, and package creation. | Implemented for first steady-flow scope |
+| Model Checker | Blocks missing CHD, invalid cells, inactive cells, nonfinite/invalid values, WEL/CHD conflicts, stale flow models, and unsupported units. | Implemented for first steady-flow scope |
+| Package Preview | Returns package list and CHD/WEL/K summary without server absolute paths or large arrays. | Implemented for first steady-flow scope |
+| `/run-model` formal path | Uses `project_id + grid_model_id + flow_model_id`; rejects legacy overrides when a Flow Model is supplied. | Implemented for first steady-flow scope |
+| RIV/DRN/GHB/RCH/EVT | Not migrated into `flow_model_v1`; legacy UI/backend code remains out of formal run path. | Not implemented in formal Flow Model |
+| Run manifest/history | Still absent. | Not implemented |
+
 # GMS Capability Matrix
 
 本矩阵仅覆盖第一阶段 MODFLOW 6 常用地下水流工作流，不覆盖完整 GMS 功能集。状态分类如下：

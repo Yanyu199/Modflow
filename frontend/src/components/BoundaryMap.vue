@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="map-container-wrapper">
     <div class="header-actions">
       <el-upload
@@ -57,12 +57,12 @@ export default {
     configuredData: Object,
     wells: Array,
     kCells: Array,
-    faults: Array, // 新增：接收断层数据
+    chdCells: { type: Array, default: () => [] },
+    faults: Array,
     gridCells: { type: Array, default: () => [] },
     projectId: { type: String, default: null },
     projectCrs: { type: Object, default: null }
-  },
-  data() {
+  },  data() {
     return {
       boundary: [],
       mode: 'cell',
@@ -90,6 +90,7 @@ export default {
     configuredData: { deep: true, handler() { this.drawMap(); } },
     wells: { deep: true, handler() { this.drawMap(); } },
     kCells: { deep: true, handler() { this.drawMap(); } },
+    chdCells: { deep: true, handler() { this.drawMap(); } },
     faults: { deep: true, handler() { this.drawMap(); } }, // 监听断层数据变化重绘地图
     gridCells: {
       immediate: true,
@@ -475,6 +476,31 @@ export default {
                 x: [x0, x0 + delr, x0 + delr, x0, x0], y: [y0, y0, y1, y1, y0],
                 mode: 'lines', fill: 'toself', fillcolor: 'rgba(64, 158, 255, 0.6)',
                 line: { color: '#409EFF', width: 1 }, hoverinfo: 'text', text: `K=${cell.k_val}`
+            });
+        });
+      }
+      if (this.chdCells && this.gridInfo) {
+        const { minX, maxY, delr, delc } = this.gridInfo;
+        this.chdCells.forEach(cell => {
+            const rendered = this.findRenderedCell(cell);
+            const trace = this.footprintTrace(rendered, {
+              fill: true,
+              fillcolor: 'rgba(0, 150, 136, 0.55)',
+              color: '#009688',
+              text: `CHD Head=${cell.head}`
+            });
+            if (trace) {
+              traces.push(trace);
+              return;
+            }
+            if (this.gridInfo.backend) return;
+            const x0 = minX + cell.col * delr;
+            const y1 = maxY - cell.row * delc;
+            const y0 = maxY - (cell.row + 1) * delc;
+            traces.push({
+                x: [x0, x0 + delr, x0 + delr, x0, x0], y: [y0, y0, y1, y1, y0],
+                mode: 'lines', fill: 'toself', fillcolor: 'rgba(0, 150, 136, 0.55)',
+                line: { color: '#009688', width: 1 }, hoverinfo: 'text', text: `CHD Head=${cell.head}`
             });
         });
       }

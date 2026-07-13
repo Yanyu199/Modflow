@@ -17,6 +17,8 @@ from geology_model_schema import (
 )
 from geology_model_service import GeologyModelService
 from geology_model_store import GeologyModelNotFoundError
+from flow_model_schema import FlowModelNotFoundError, FlowModelValidationError
+from flow_model_service import FlowModelService
 from grid_model_schema import GridModelNotFoundError, GridModelValidationError, parse_cell_id
 from grid_model_service import GridModelService
 from grid_model_store import GridArtifactError
@@ -32,6 +34,7 @@ GEO_MODELS = {}
 project_store = ProjectStore()
 geology_service = GeologyModelService(project_store)
 grid_service = GridModelService(project_store)
+flow_service = FlowModelService(project_store)
 
 
 def api_error(message, status=400, code="validation_error", details=None):
@@ -77,6 +80,14 @@ def grid_exception_response(exc):
     if isinstance(exc, GridArtifactError):
         return api_error("网格数组产物无效", 400, "grid_artifact_invalid")
     return project_exception_response(exc)
+
+
+def flow_exception_response(exc):
+    if isinstance(exc, FlowModelNotFoundError):
+        return api_error("Flow model not found.", 404, "flow_model_not_found")
+    if isinstance(exc, FlowModelValidationError):
+        return api_error("Flow model validation failed.", 400, "flow_model_validation_error", exc.diagnostics)
+    return grid_exception_response(exc)
 
 
 def json_payload():
@@ -328,6 +339,81 @@ def rebuild_grid_model(project_id, grid_model_id):
         return grid_exception_response(e)
 
 
+@app.route('/projects/<project_id>/flow-models/validate', methods=['POST'])
+def validate_flow_model(project_id):
+    try:
+        payload = json_payload()
+        grid_model_id = payload.get("grid_model_id")
+        if not grid_model_id:
+            return api_error("grid_model_id is required.", 400, "grid_model_id_required")
+        result = flow_service.validate_payload(project_id, grid_model_id, payload)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        return flow_exception_response(e)
+
+
+@app.route('/projects/<project_id>/flow-models', methods=['POST'])
+def create_flow_model(project_id):
+    try:
+        payload = json_payload()
+        grid_model_id = payload.get("grid_model_id")
+        if not grid_model_id:
+            return api_error("grid_model_id is required.", 400, "grid_model_id_required")
+        result = flow_service.create(project_id, grid_model_id, payload)
+        return jsonify({"success": True, **result}), 201
+    except Exception as e:
+        return flow_exception_response(e)
+
+
+@app.route('/projects/<project_id>/flow-models/active', methods=['GET'])
+def get_active_flow_model(project_id):
+    try:
+        result = flow_service.get_active(project_id)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        return flow_exception_response(e)
+
+
+@app.route('/projects/<project_id>/flow-models/<flow_model_id>', methods=['PUT'])
+def update_flow_model(project_id, flow_model_id):
+    try:
+        result = flow_service.update(project_id, flow_model_id, json_payload())
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        return flow_exception_response(e)
+
+
+@app.route('/projects/<project_id>/flow-models/<flow_model_id>/check', methods=['POST'])
+def check_flow_model(project_id, flow_model_id):
+    try:
+        result = flow_service.check(project_id, flow_model_id)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        return flow_exception_response(e)
+
+
+@app.route('/projects/<project_id>/flow-models/<flow_model_id>/package-preview', methods=['GET'])
+def flow_model_package_preview(project_id, flow_model_id):
+    try:
+        result = flow_service.package_preview(project_id, flow_model_id)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        return flow_exception_response(e)
+
+
+@app.route('/projects/<project_id>/flow-models/<flow_model_id>/rebuild', methods=['POST'])
+def rebuild_flow_model(project_id, flow_model_id):
+    try:
+        result = flow_service.check(project_id, flow_model_id)
+        checker = result["checker"]
+        if not checker.get("runnable"):
+            return jsonify({"success": False, **result}), 400
+        saved = flow_service.update(project_id, flow_model_id, result["flow_model"])
+        return jsonify({"success": True, **saved})
+    except Exception as e:
+        return flow_exception_response(e)
+
+
 @app.route('/upload-boreholes', methods=['POST'])
 def upload_boreholes():
     try:
@@ -425,17 +511,63 @@ def run():
         data = json_payload()
         project_id = require_project_from_json(data)
         if any(key in data for key in ("top", "botm", "idomain", "grid_arrays")):
-            return api_error("top/botm/idomain 必须来自后端 Grid Store，运行请求不得覆盖权威数组", 400, "grid_authoritative_arrays")
+            return api_error("top/botm/idomain must come from backend Grid Store.", 400, "grid_authoritative_arrays")
         grid_model_id = data.get("grid_model_id")
         if not grid_model_id:
-            return api_error("运行模型必须提供 grid_model_id", 400, "grid_model_id_required")
+            return api_error("grid_model_id is required to run a model.", 400, "grid_model_id_required")
+
+        flow_model_id = data.get("flow_model_id")
+        legacy_fields = (
+            "params",
+            "boundary",
+            "boundary_conditions",
+            "wells",
+            "k_cells",
+            "rch_data",
+            "evt_data",
+        )
+        if flow_model_id:
+            supplied_legacy_fields = [key for key in legacy_fields if key in data]
+            if supplied_legacy_fields:
+                return api_error(
+                    "Saved flow_model_id is authoritative; legacy flow parameters are not accepted in the same run request.",
+                    400,
+                    "flow_model_authoritative",
+                    {"legacy_fields": supplied_legacy_fields},
+                )
+            res_data = flow_service.run(
+                project_id,
+                flow_model_id,
+                keep_run_dir=data.get("keep_run_dir"),
+            )
+            return jsonify({
+                "success": True,
+                "points": res_data["points"],
+                "pathlines": res_data.get("pathlines", []),
+                "logs": res_data.get("logs", ""),
+                "run_id": res_data.get("run_id"),
+                "work_dir": res_data.get("work_dir") if res_data.get("retained") else None,
+                "retained": res_data.get("retained"),
+                "flow_model_id": res_data.get("flow_model_id"),
+                "grid_model_id": res_data.get("grid_model_id"),
+                "checker": res_data.get("checker"),
+                "package_preview": res_data.get("package_preview"),
+            })
+
+        if not data.get("allow_legacy_flow_model"):
+            return api_error(
+                "flow_model_id is required. Legacy request bodies are available only with allow_legacy_flow_model=true.",
+                400,
+                "flow_model_id_required",
+            )
+
         boundary = data.get('boundary')
         params = data.get('params')
         custom_boundaries = data.get('boundary_conditions', [])
         rch_data = data.get('rch_data', [])
         evt_data = data.get('evt_data', [])
         mp_start_cell = data.get('mp_start_cell')
-        faults = data.get('faults', [])  # 获取断层数据
+        faults = data.get('faults', [])
 
         manifest, arrays = grid_service.ensure_runnable(project_id, grid_model_id)
         shape = (manifest["geometry"]["nlay"], manifest["geometry"]["nrow"], manifest["geometry"]["ncol"])
@@ -447,7 +579,6 @@ def run():
         else:
             mp_warnings = []
 
-        # 调用引擎
         res_data, logs = run_simulation(
             params=params,
             boundary_coords=boundary,
@@ -458,18 +589,13 @@ def run():
             rch_data=rch_data,
             evt_data=evt_data,
             mp_start_cell=mp_start_cell,
-            faults=faults,  # 传递断层数据给引擎
+            faults=faults,
             grid_model={"manifest": manifest, "arrays": arrays},
         )
         adapter_warnings = well_warnings + k_warnings + mp_warnings
-        if adapter_warnings:
-            logs = "\n".join(
-                [
-                    logs,
-                    "⚠️ Legacy cell selection adapter warnings:",
-                    *[f"- {item['code']}: {item['message']}" for item in adapter_warnings],
-                ]
-            )
+        legacy_messages = [logs, "Legacy flow model adapter is deprecated; save a flow_model_v1 before running."]
+        legacy_messages.extend([f"- {item['code']}: {item['message']}" for item in adapter_warnings])
+        logs = "\n".join(str(item) for item in legacy_messages if item)
 
         if res_data is None:
             return jsonify({"success": False, "error": "Simulation failed.", "logs": logs})
@@ -478,17 +604,19 @@ def run():
             "success": True,
             "points": res_data['points'],
             "pathlines": res_data['pathlines'],
-            "logs": logs
+            "logs": logs,
+            "deprecated_legacy_flow_adapter": True,
         })
 
     except Exception as e:
         print(f"Error in /run-model: {e}")
+        if isinstance(e, (FlowModelValidationError, FlowModelNotFoundError)):
+            return flow_exception_response(e)
         if isinstance(e, (ProjectValidationError, ProjectNotFoundError)):
             return project_exception_response(e)
         if isinstance(e, (GridModelValidationError, GridModelNotFoundError, GridArtifactError)):
             return grid_exception_response(e)
         return jsonify({"success": False, "error": str(e)}), 500
-
 
 @app.route('/preview-geometry', methods=['POST'])
 def preview_geometry():

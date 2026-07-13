@@ -1,3 +1,36 @@
+# 2026-07-13 Flow Model v1 Update
+
+Current formal flow path:
+
+```mermaid
+flowchart LR
+  Browser["Vue Flow page"]
+  FlowAPI["Flask Flow Model API"]
+  ProjectStore["ProjectStore"]
+  GridStore["GridModelStore"]
+  FlowStore["FlowModelStore / flow_model.json"]
+  Checker["Flow Model Checker"]
+  Compiler["Flow Package Compiler"]
+  MF6["MODFLOW 6"]
+  Post["post_process"]
+
+  Browser -->|validate/create/update/check| FlowAPI
+  FlowAPI --> ProjectStore
+  FlowAPI --> GridStore
+  FlowAPI --> FlowStore
+  FlowAPI --> Checker
+  Checker -->|runnable package summary| Browser
+  Browser -->|run project_id/grid_model_id/flow_model_id| FlowAPI
+  FlowAPI --> FlowStore
+  FlowAPI --> Checker
+  Checker --> Compiler
+  Compiler -->|TDIS IMS GWF DIS IC NPF CHD WEL OC| MF6
+  MF6 -->|hds bud lst| Post
+  Post --> Browser
+```
+
+The legacy `MF6Builder` path still exists for compatibility and for packages not yet migrated, but the normal frontend steady-flow workflow no longer sends legacy `params`, `wells`, `k_cells`, or line-based CHD data to `/run-model`.
+
 # Current Architecture
 
 本文描述当前代码事实，不描述目标架构。任何未在代码中确认的内容均标记为“需要验证”。

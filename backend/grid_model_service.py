@@ -312,6 +312,16 @@ class GridModelService:
                 }
             },
         )
+        try:
+            from flow_model_schema import FlowModelNotFoundError
+            from flow_model_store import FlowModelStore
+
+            FlowModelStore(self.project_store).mark_active_stale(
+                project,
+                "Grid model was regenerated; re-check and save the flow model before running.",
+            )
+        except FlowModelNotFoundError:
+            pass
         return saved
 
     def get_active(self, project_id):
@@ -562,4 +572,3 @@ class GridModelService:
             )
             detail["footprint"] = [{"x": float(x), "y": float(y)} for x, y in poly.exterior.coords]
         return detail
-

@@ -1,3 +1,13 @@
+# 2026-07-13 Flow Model v1 Update
+
+The project now has a first persistent `flow_model_v1` for the steady-flow workflow. The formal Flow Model path covers IC, NPF, CHD, WEL, IMS, and OC, stores the active model at `backend/projects/<project_id>/flow/flow_model.json`, and updates `project.references.flow_model_id`.
+
+The normal `/run-model` request now uses `project_id`, `grid_model_id`, and `flow_model_id`. In this path, the saved Flow Model is the authority for IC, K, CHD, WEL, solver, and output control. Request-body overrides for legacy `params`, `boundary_conditions`, `wells`, `k_cells`, `rch_data`, and `evt_data` are rejected when `flow_model_id` is supplied. A deprecated legacy adapter remains only behind `allow_legacy_flow_model=true`.
+
+The frontend Flow page now supports selecting WEL, K, and CHD cells, saving/checking the Flow Model, previewing package summary, and enabling run only after the checker reports the model is runnable.
+
+Still not implemented in the formal Flow Model: RIV, DRN, GHB, RCH, EVT, STO, transient flow, MODPATH, GWT, run manifest, and run history.
+
 # Project Overview
 
 审计日期：2026-07-12  

@@ -3,6 +3,7 @@ import json
 
 import app as app_module
 from geology_model_service import GeologyModelService
+from flow_model_service import FlowModelService
 from grid_model_service import GridModelService
 from project_store import ProjectStore
 
@@ -44,6 +45,7 @@ def client_with_store(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "project_store", store)
     monkeypatch.setattr(app_module, "geology_service", GeologyModelService(store))
     monkeypatch.setattr(app_module, "grid_service", GridModelService(store))
+    monkeypatch.setattr(app_module, "flow_service", FlowModelService(store))
     app_module.GEO_MODELS.clear()
     app_module.app.config.update(TESTING=True)
     return app_module.app.test_client(), store
