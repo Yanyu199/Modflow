@@ -1,3 +1,9 @@
+# 2026-07-13 RIV Boundary v1 Update
+
+The formal steady-flow path now includes cell-based RIV boundaries. RIV is stored in `flow_model_v1` under `boundaries.riv`, validated by the Model Checker, compiled into `ModflowGwfriv`, written as `gwf.riv`, and reported in `run_manifest_v1` package-budget diagnostics when present. The frontend Flow page can create/edit/delete RIV grid-cell records with stage, conductance, and river bottom.
+
+The old line-boundary RIV UI is no longer the formal RIV workflow. It is disabled in the line-boundary panel, and the legacy backend adapter rejects RIV records that do not explicitly provide conductance and river bottom.
+
 # 2026-07-13 Run Manifest v1 Update
 
 The project now has the first persistent run record for the formal steady-flow path. `run_manifest_v1` stores one MODFLOW 6 execution under `backend/projects/<project_id>/runs/<run_id>/`, including input files, listing files, head/budget outputs, stdout/stderr logs, MF6 executable metadata, model snapshots, convergence diagnostics, water budget, package budget, and output registry.
@@ -6,13 +12,13 @@ The normal run flow now has project-level run history endpoints and the frontend
 
 # 2026-07-13 Flow Model v1 Update
 
-The project now has a first persistent `flow_model_v1` for the steady-flow workflow. The formal Flow Model path covers IC, NPF, CHD, WEL, IMS, and OC, stores the active model at `backend/projects/<project_id>/flow/flow_model.json`, and updates `project.references.flow_model_id`.
+The project now has a first persistent `flow_model_v1` for the steady-flow workflow. The formal Flow Model path covers IC, NPF, CHD, WEL, RIV, IMS, and OC, stores the active model at `backend/projects/<project_id>/flow/flow_model.json`, and updates `project.references.flow_model_id`.
 
-The normal `/run-model` request now uses `project_id`, `grid_model_id`, and `flow_model_id`. In this path, the saved Flow Model is the authority for IC, K, CHD, WEL, solver, and output control. Request-body overrides for legacy `params`, `boundary_conditions`, `wells`, `k_cells`, `rch_data`, and `evt_data` are rejected when `flow_model_id` is supplied. A deprecated legacy adapter remains only behind `allow_legacy_flow_model=true`.
+The normal `/run-model` request now uses `project_id`, `grid_model_id`, and `flow_model_id`. In this path, the saved Flow Model is the authority for IC, K, CHD, WEL, RIV, solver, and output control. Request-body overrides for legacy `params`, `boundary_conditions`, `wells`, `k_cells`, `rch_data`, and `evt_data` are rejected when `flow_model_id` is supplied. A deprecated legacy adapter remains only behind `allow_legacy_flow_model=true`.
 
-The frontend Flow page now supports selecting WEL, K, and CHD cells, saving/checking the Flow Model, previewing package summary, and enabling run only after the checker reports the model is runnable.
+The frontend Flow page now supports selecting WEL, K, CHD, and RIV cells, saving/checking the Flow Model, previewing package summary, and enabling run only after the checker reports the model is runnable.
 
-Still not implemented in the formal Flow Model: RIV, DRN, GHB, RCH, EVT, STO, transient flow, MODPATH, and GWT. Run manifest and basic run history are implemented for the first steady-flow scope.
+Still not implemented in the formal Flow Model: DRN, GHB, RCH, EVT, STO, transient flow, MODPATH, and GWT. Run manifest and basic run history are implemented for the first steady-flow scope.
 
 # Project Overview
 
@@ -142,7 +148,7 @@ Still not implemented in the formal Flow Model: RIV, DRN, GHB, RCH, EVT, STO, tr
 - 支持全局 K 和指定单元 K 覆盖。
 - 支持 WEL package。
 - 支持 CHD package。
-- 部分支持 RIV package。
+- 正式 Flow Model 支持 cell-based RIV package；legacy line-based RIV 仅作兼容入口。
 - 支持 RCHA 和 EVTA package 的后端创建，但当前 UI 数据来源不匹配。
 - 运行 MODFLOW 6 后读取 `gwf.hds` 和 `gwf.bud`。
 - 将水头、比流量、估算六面流量返回给前端。
@@ -159,7 +165,7 @@ Still not implemented in the formal Flow Model: RIV, DRN, GHB, RCH, EVT, STO, tr
 - MF6 可执行文件已通过统一 resolver 处理；MODPATH 路径仍是后续技术债。
 - 正常流程已不再隐式使用 `project_id='default'`；后端项目相关接口要求显式 `project_id`。
 - 运行目录已改为独立目录，失败默认保留；正式 run manifest 和清理策略仍需完善。
-- 已有自动化测试、Grid Model 后端/API 测试和最小稳定流数值基准；主应用运行结果仍缺正式水量平衡和收敛验收。
+- 已有自动化测试、Grid Model 后端/API 测试、最小稳定流数值基准和 RIV 数值基准；正式运行结果包含收敛、总体水量平衡和 package budget 诊断。
 - CRS、长度单位、时间单位和流量单位已进入 Project Schema；Shapefile 边界上传会读取 CRS 并拒绝缺失或冲突。钻孔/断层 CSV 当前按用户声明的项目 CRS 解释，重投影和各 package 单位换算仍未实现。
 
 ## 需要验证的信息
@@ -168,5 +174,5 @@ Still not implemented in the formal Flow Model: RIV, DRN, GHB, RCH, EVT, STO, tr
 - 不同机器上的 MF6 resolver 行为需要通过 `python -m pytest` 持续验证。
 - MODPATH 运行是否可用，因为代码硬编码到 `G:\workspace\flopy-project\modpath7\bin\mpath7.exe`。
 - 当前返回的六面流量是否与 MODFLOW 6 cell-by-cell budget 严格一致，需要用标准模型对照验证。
-- Grid Model 已经持久化 `top/botm/idomain`，但 Flow Model 尚未正式 schema 化，IC/NPF/CHD/WEL 参数保存和迁移仍需要验证。
+- Grid Model 已经持久化 `top/botm/idomain`；Flow Model 已覆盖 IC/NPF/CHD/WEL/RIV 的第一阶段 schema，RCH/EVT/DRN/GHB 等仍需要后续迁移和验证。
 - 断层当前明确仅用于地质插值分区，不是 MODFLOW HFB；其地质合理性和数值稳定性需要用人工控制案例验证。

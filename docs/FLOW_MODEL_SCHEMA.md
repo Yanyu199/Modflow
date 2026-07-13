@@ -2,6 +2,12 @@
 
 Updated: 2026-07-13
 
+## 2026-07-13 RIV Boundary Update
+
+`flow_model_v1` now includes a formal cell-based RIV boundary workflow for the single-period steady-flow scope. RIV records are persisted under `boundaries.riv`, validated by the Model Checker, compiled into `ModflowGwfriv`, written to `gwf.riv`, and included in run package-budget diagnostics when present.
+
+The legacy line-boundary RIV path is not the formal data model. It no longer supplies hidden default conductance or river-bottom values; legacy RIV input must explicitly provide stage, conductance, and river bottom. Future conceptual-model work may add line-to-grid RIV mapping, but this version uses explicit grid `cell_id` records.
+
 This document describes the first persistent steady-flow model contract implemented by the project. It is intentionally limited to MODFLOW 6 GWF steady flow with structured DIS grids.
 
 ## Responsibilities
@@ -9,7 +15,7 @@ This document describes the first persistent steady-flow model contract implemen
 - Project: identity, CRS, units, and active model references.
 - Geology Model: boundary, boreholes, stratigraphy, faults, interpolation inputs, and geology provenance.
 - Grid Model: backend-authoritative structured DIS grid, `top`, `botm`, `idomain`, `delr`, `delc`, and stable `cell_id`.
-- Flow Model: IC, NPF, CHD, WEL, IMS, OC, checker diagnostics, and package preview.
+- Flow Model: IC, NPF, CHD, WEL, RIV, IMS, OC, checker diagnostics, and package preview.
 - Run: one execution of a checked flow model, persisted as `run_manifest_v1` with input/output artifacts, convergence diagnostics, water budget, and package budget.
 
 ## Storage
@@ -84,6 +90,20 @@ Only one active flow model is supported per project in v1.
         ]
       }
     ],
+    "riv": [
+      {
+        "boundary_id": "main_river",
+        "name": "Main river",
+        "cells": [
+          {
+            "cell_id": "grid_0123456789abcdef:L0:R0:C2",
+            "stage": 9.6,
+            "conductance": 5.0,
+            "river_bottom": 8.0
+          }
+        ]
+      }
+    ],
     "wel": [
       {
         "well_id": "center_well",
@@ -146,6 +166,43 @@ Sign convention:
 
 WEL entries are blocked on CHD cells. Multiple WEL entries in one cell are allowed but produce a checker warning.
 
+## RIV
+
+RIV is cell based in v1. Each RIV boundary contains a stable `boundary_id` and one or more cell records:
+
+```json
+{
+  "boundary_id": "main_river",
+  "name": "Main river",
+  "cells": [
+    {
+      "cell_id": "grid_0123456789abcdef:L0:R0:C2",
+      "stage": 9.6,
+      "conductance": 5.0,
+      "river_bottom": 8.0
+    }
+  ]
+}
+```
+
+Units:
+
+- `stage`: model vertical length unit, currently `m`.
+- `river_bottom`: model vertical length unit, currently `m`.
+- `conductance`: `m2/day`, consistent with MODFLOW 6 RIV conductance for the current unit system.
+
+Validation rules:
+
+- `boundary_id` must be unique and contain only letters, numbers, `_`, or `-`.
+- `cell_id` must refer to the active Grid Model, valid layer/row/column, and active `idomain`.
+- `stage`, `river_bottom`, and `conductance` must be finite.
+- `conductance > 0`.
+- `stage > river_bottom`.
+- One RIV record per cell in `flow_model_v1`.
+- RIV on CHD cells is blocked.
+- RIV on WEL cells is allowed but produces a warning because combined source/sink behavior needs review.
+- Stage or river bottom outside the selected cell top/bottom range produces warnings.
+
 ## Checker
 
 The checker returns stable `error`, `warning`, and `info` diagnostics. A flow model is runnable only when there are no errors.
@@ -156,6 +213,7 @@ Implemented blocking checks include:
 - Unsupported units.
 - Invalid schema, ID, status, or unknown fields.
 - Invalid IC, K, icelltype, CHD, WEL values.
+- Invalid RIV boundary IDs, cells, stage, conductance, river bottom, and RIV/CHD conflicts.
 - Invalid, out-of-bounds, cross-grid, or inactive `cell_id`.
 - Missing CHD.
 - WEL/CHD cell conflict.
@@ -166,6 +224,9 @@ Implemented warnings include:
 - Initial head outside cell top/bottom.
 - CHD head outside cell top/bottom.
 - Multiple WEL entries in one cell.
+- RIV/WEL shared cells.
+- RIV stage or river bottom outside cell top/bottom.
+- Extremely small or large RIV conductance.
 
 ## Package Compiler
 
@@ -178,7 +239,8 @@ The compiler reads Grid Store arrays and creates:
 - IC
 - NPF
 - CHD
-- WEL
+- WEL, only when at least one well is defined
+- RIV, only when at least one RIV cell is defined
 - OC
 
 The normal `/run-model` path rejects request-body overrides for IC, K, CHD, WEL, RCH, EVT, boundary geometry, `top`, `botm`, and `idomain`. The saved Flow Model is the authority.
@@ -229,3 +291,35 @@ The formal Flow Model benchmark uses:
 - Expected heads: `[10.0, 9.7, 9.4, 9.2, 9.0]`.
 
 Expected heads come from the same independent finite-volume calculation used by the original steady-flow benchmark, not from reverse-fitting MF6 output.
+
+## RIV Benchmarks
+
+RIV is covered by two independent finite-volume benchmark branches in `backend/tests/test_flow_riv.py`.
+
+Shared grid and hydraulic setup:
+
+- Grid: 1 layer, 1 row, 5 columns.
+- `delr = 100 m`, `delc = 100 m`.
+- `top = 10 m`, `bottom = 0 m`.
+- `Kx = Ky = Kz = 1 m/day`.
+- `icelltype = 0`.
+- Left CHD: 10 m at `L0:R0:C0`.
+- Right CHD: 9 m at `L0:R0:C4`.
+- RIV cell: `L0:R0:C2`.
+- Initial head: 9.5 m.
+
+Branch 1, head above river bottom:
+
+- `stage = 9.6 m`.
+- `conductance = 5.0 m2/day`.
+- `river_bottom = 8.0 m`.
+- Expected heads are solved with the active RIV term `conductance * (stage - head)`.
+
+Branch 2, bottom-limited:
+
+- `stage = 9.6 m`.
+- `conductance = 5.0 m2/day`.
+- `river_bottom = 9.55 m`.
+- Expected RIV exchange is limited to `conductance * (stage - river_bottom)` because the simulated cell head is below river bottom.
+
+Both branches check MF6 normal termination, convergence, finite `.hds` results, RIV package creation, `gwf.riv` registration, RIV package budget, total in/out, and percent discrepancy. The expected heads and RIV exchange are computed in `backend/riv_benchmark.py`, not reverse-fitted from MODFLOW 6 output.

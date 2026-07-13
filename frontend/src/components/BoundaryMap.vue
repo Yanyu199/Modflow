@@ -58,6 +58,7 @@ export default {
     wells: Array,
     kCells: Array,
     chdCells: { type: Array, default: () => [] },
+    rivCells: { type: Array, default: () => [] },
     faults: Array,
     gridCells: { type: Array, default: () => [] },
     projectId: { type: String, default: null },
@@ -91,6 +92,7 @@ export default {
     wells: { deep: true, handler() { this.drawMap(); } },
     kCells: { deep: true, handler() { this.drawMap(); } },
     chdCells: { deep: true, handler() { this.drawMap(); } },
+    rivCells: { deep: true, handler() { this.drawMap(); } },
     faults: { deep: true, handler() { this.drawMap(); } }, // 监听断层数据变化重绘地图
     gridCells: {
       immediate: true,
@@ -501,6 +503,32 @@ export default {
                 x: [x0, x0 + delr, x0 + delr, x0, x0], y: [y0, y0, y1, y1, y0],
                 mode: 'lines', fill: 'toself', fillcolor: 'rgba(0, 150, 136, 0.55)',
                 line: { color: '#009688', width: 1 }, hoverinfo: 'text', text: `CHD Head=${cell.head}`
+            });
+        });
+      }
+      if (this.rivCells && this.gridInfo) {
+        const { minX, maxY, delr, delc } = this.gridInfo;
+        this.rivCells.forEach(cell => {
+            const rendered = this.findRenderedCell(cell);
+            const text = `RIV stage=${cell.stage}, cond=${cell.conductance}, bottom=${cell.river_bottom}`;
+            const trace = this.footprintTrace(rendered, {
+              fill: true,
+              fillcolor: 'rgba(32, 201, 151, 0.50)',
+              color: '#20C997',
+              text
+            });
+            if (trace) {
+              traces.push(trace);
+              return;
+            }
+            if (this.gridInfo.backend) return;
+            const x0 = minX + cell.col * delr;
+            const y1 = maxY - cell.row * delc;
+            const y0 = maxY - (cell.row + 1) * delc;
+            traces.push({
+                x: [x0, x0 + delr, x0 + delr, x0, x0], y: [y0, y0, y1, y1, y0],
+                mode: 'lines', fill: 'toself', fillcolor: 'rgba(32, 201, 151, 0.50)',
+                line: { color: '#20C997', width: 1 }, hoverinfo: 'text', text
             });
         });
       }

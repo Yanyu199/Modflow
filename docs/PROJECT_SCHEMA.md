@@ -148,5 +148,5 @@ backend/projects/<project_id>/project.json
 - `GEO_MODELS` 仍是进程内派生缓存，只按 `project_id` 隔离；权威地质数据已持久化到 `backend/projects/<project_id>/geology/geology_model.json`。
 - 地质体模型已有后端 `geology_model` schema v1.0，但派生地层面数组仍采用可重建策略，尚未保存为 geology `.npz` artifact。
 - Grid Model 已有后端 `grid_model` schema v1.0，并保存 `grid_model.json` 和 `grid_arrays.npz`。
-- 水动力模型配置、运行历史和 run manifest 仍未持久化到项目目录。
+- 水动力模型配置已有 `flow_model_v1` 第一阶段持久化，运行历史和 run manifest 已保存到 `backend/projects/<project_id>/runs/<run_id>/`；DRN/GHB/RCH/EVT 等未迁移 package 仍待扩展。
 - Shapefile 文件本身还没有托管到项目目录，本轮只对上传请求做项目校验。

@@ -1,3 +1,7 @@
+# 2026-07-13 RIV Boundary v1 Update
+
+RIV has moved from "not implemented in formal Flow Model" to "implemented for first steady-flow scope" as a cell-based package. Remaining RIV gaps are conceptual line/river-network mapping, transient period data, import tooling, and richer UI workflows. DRN, GHB, RCH, and EVT remain the next source/sink package gaps.
+
 # 2026-07-13 Run Manifest v1 Update
 
 | Capability | Current status after this update | Classification |
@@ -10,7 +14,7 @@
 
 # 2026-07-13 Flow Model v1 Update
 
-The first formal steady-flow Flow Model is now partially implemented and should be treated as the authoritative path for IC, NPF, CHD, WEL, IMS, and OC in the normal frontend workflow.
+The first formal steady-flow Flow Model is now partially implemented and should be treated as the authoritative path for IC, NPF, CHD, WEL, RIV, IMS, and OC in the normal frontend workflow.
 
 | Capability | Current status after this update | Classification |
 |---|---|---|
@@ -19,10 +23,11 @@ The first formal steady-flow Flow Model is now partially implemented and should 
 | NPF | Explicit `kx`, `ky`, `kz`, per-layer `icelltype`, and cell overrides are materialized into FloPy NPF. | Implemented for first steady-flow scope |
 | CHD | Cell-based CHD with stable `cell_id`, arbitrary layer support, active-cell validation, and package creation. | Implemented for first steady-flow scope |
 | WEL | Cell-based WEL with stable `cell_id`, arbitrary layer support, sign convention, CHD conflict check, and package creation. | Implemented for first steady-flow scope |
+| RIV | Cell-based RIV with stable `cell_id`, stage/conductance/river-bottom validation, CHD conflict check, WEL shared-cell warning, package creation, and budget diagnostics. | Implemented for first steady-flow scope |
 | Model Checker | Blocks missing CHD, invalid cells, inactive cells, nonfinite/invalid values, WEL/CHD conflicts, stale flow models, and unsupported units. | Implemented for first steady-flow scope |
-| Package Preview | Returns package list and CHD/WEL/K summary without server absolute paths or large arrays. | Implemented for first steady-flow scope |
+| Package Preview | Returns package list and CHD/WEL/RIV/K summary without server absolute paths or large arrays. | Implemented for first steady-flow scope |
 | `/run-model` formal path | Uses `project_id + grid_model_id + flow_model_id`; rejects legacy overrides when a Flow Model is supplied. | Implemented for first steady-flow scope |
-| RIV/DRN/GHB/RCH/EVT | Not migrated into `flow_model_v1`; legacy UI/backend code remains out of formal run path. | Not implemented in formal Flow Model |
+| DRN/GHB/RCH/EVT | Not migrated into `flow_model_v1`; legacy UI/backend code remains out of formal run path. | Not implemented in formal Flow Model |
 | Run manifest/history | Implemented as `run_manifest_v1` for the first steady-flow scope. | Implemented for first steady-flow scope |
 
 # GMS Capability Matrix
@@ -53,11 +58,11 @@ The first formal steady-flow Flow Model is now partially implemented and should 
 | 各向异性 K | k33/k22/angle 等 | 无 | 未实现 | 第一阶段至少明确不支持并阻止 UI 暗示 |
 | 初始水头 IC | 可设置全局/分区/按层初始水头 | 后端强制使用顶板 top_layer 作为 strt | 部分实现 | UI/API 支持 strt；与 CHD 解耦；保存到项目 |
 | 定水头 CHD | 线/面/单元边界，可设置水头 | UI 可设置，后端创建 layer 0 CHD | 部分实现 | 支持层选择、时间序列、单位验证；基准模型对照 |
-| 河流 RIV | stage/cond/rbot 全部进入 RIV | UI 有字段；后端只用 stage，cond/rbot 固定 | 存在明显错误 | 后端使用 UI cond/rbot；支持层选择；测试 MF6 输入文件 |
+| 河流 RIV | stage/cond/rbot 全部进入 RIV | 正式 Flow Model 支持 cell-based RIV，stage/conductance/river_bottom 进入 `ModflowGwfriv`，并有两分支数值基准；line-to-cell 河网映射未实现 | 部分实现 | 增加线/面导入、时间序列、更多冲突检查和 UI 批量编辑 |
 | 排水沟 DRN | elev/cond 进入 DRN package | UI 有字段，后端未创建 DRN | UI 已存在但后端未实现 | 创建 `ModflowGwfdrn`，写入测试验证 |
 | 通用水头 GHB | bhead/cond 进入 GHB package | UI 有字段，后端未创建 GHB | UI 已存在但后端未实现 | 创建 `ModflowGwfghb`，写入测试验证 |
 | 无流边界 | 默认外部 inactive/no-flow | 通过 Grid Model `idomain` 和边界外 inactive 隐式存在；激活规则写入 generation | 部分实现 | 明确 no-flow 规则；与边界线段配置交互一致 |
-| 井 WEL | 井位置、层、抽/注水量 | UI 点选后端 `cell_id`，后端 legacy adapter 解析为 row/col/layer 并创建 WEL | 部分实现 | 正式 Flow schema、单位和正负号规则；测试 WEL 文件 |
+| 井 WEL | 井位置、层、抽/注水量 | 正式 Flow Model 使用 stable `cell_id` 创建 WEL，并进入 run package budget | 已实现/需扩展 | 增加井表导入、筛管/多层井、时间序列和批量编辑 |
 | 补给 RCH | 面分区/栅格/散点插值进入 RCH | 后端可用面分区；UI 调用不存在的 scatter 接口 | 存在明显错误 | 统一数据结构；实现 scatter 或改 UI 接 `/upload-zone`；测试 RCHA |
 | 蒸发 EVT | rate/surface/depth 可配置 | 后端 EVTA 固定 depth=2.0；UI 数据链路错误 | 存在明显错误 | UI/API 支持 surface/rate/depth；测试 EVTA |
 | 稳定流 | 明确定义 steady period 和验收 | TDIS 单应力期，未显式 steady/transient 语义 | 部分实现 | 明确 steady 配置；收敛和水量平衡通过 |
@@ -79,7 +84,7 @@ The first formal steady-flow Flow Model is now partially implemented and should 
 ## 最重要的差距
 
 1. UI 和 FloPy package 不一致：DRN/GHB/RCH/EVT/MODPATH 是最明显断点。
-2. 已有项目级、地质模型和网格模型 schema，但还没有正式 flow/run schema，仍无法保证保存/打开后复现同一 MF6 输入文件。
-3. 没有数值验收，不能判定结果是否收敛、守恒、可复核。
-4. Grid Model 已统一基础 row/col/cell_id，但边界条件线段、RCH/EVT、Flow schema 仍需全面迁移到 `cell_id` 和后端 package 写入测试。
-5. MODPATH 路径、run manifest 和运行目录清理策略仍需后续完善。
+2. RCH/EVT 仍存在 UI/API 数据结构断点，DRN/GHB 尚未进入 formal Flow Model。
+3. 已有 flow/run schema 的第一阶段，但保存/打开后对所有后续 package 的无损复现仍需随 package 迁移扩展。
+4. Grid Model 已统一基础 row/col/cell_id，但边界条件线段、RCH/EVT 等仍需全面迁移到 `cell_id` 或明确几何引用和后端 package 写入测试。
+5. MODPATH 路径、运行产物下载/清理 UI 和多运行对比仍需后续完善。

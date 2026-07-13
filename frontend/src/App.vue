@@ -66,6 +66,7 @@
             :wells="wells"
             :kCells="kCells"
             :chdCells="chdCells"
+            :rivCells="rivCells"
             :faults="faults"
             :gridCells="gridRenderCells"
             :projectId="projectId"
@@ -147,6 +148,7 @@
             :wells="wells"
             :kCells="kCells"
             :chdCells="chdCells"
+            :rivCells="rivCells"
             :faults="faults"
             :gridCells="gridRenderCells"
             :projectId="projectId"
@@ -275,6 +277,7 @@
           :wells="wells"
           :kCells="kCells"
           :chdCells="chdCells"
+          :rivCells="rivCells"
           :flowCheck="flowCheck"
           :packagePreview="packagePreview"
           :canRunFlow="canRunFlow"
@@ -321,6 +324,7 @@
               <el-radio label="well">水井</el-radio>
               <el-radio label="k_cell">变K</el-radio>
               <el-radio label="chd">CHD</el-radio>
+              <el-radio label="riv">RIV</el-radio>
             </el-radio-group>
           </el-form-item>
           <div v-if="tempCell.type === 'well'">
@@ -331,6 +335,11 @@
           </div>
           <div v-if="tempCell.type === 'chd'">
              <el-form-item label="定水头 Head"><el-input-number v-model="tempCell.head" :step="0.1" style="width: 100%"></el-input-number></el-form-item>
+          </div>
+          <div v-if="tempCell.type === 'riv'">
+             <el-form-item label="River stage (m)"><el-input-number v-model="tempCell.stage" :step="0.1" style="width: 100%"></el-input-number></el-form-item>
+             <el-form-item label="Conductance (m2/day)"><el-input-number v-model="tempCell.conductance" :min="0" :step="1" style="width: 100%"></el-input-number></el-form-item>
+             <el-form-item label="River bottom (m)"><el-input-number v-model="tempCell.river_bottom" :step="0.1" style="width: 100%"></el-input-number></el-form-item>
           </div>
         </el-form>
       </div>
@@ -405,6 +414,7 @@ export default {
       wells: [],
       kCells: [],
       chdCells: [],
+      rivCells: [],
       currentFlowModel: null,
       flowCheck: null,
       packagePreview: null,
@@ -441,6 +451,7 @@ export default {
         || this.wells.length > 0
         || this.kCells.length > 0
         || this.chdCells.length > 0
+        || this.rivCells.length > 0
         || Object.keys(this.boundaryConfigs).length > 0
         || this.resultPoints.length > 0
         || this.currentRun
@@ -506,7 +517,8 @@ export default {
     },
     wells: { deep: true, handler() { this.invalidateFlowModel(); } },
     kCells: { deep: true, handler() { this.invalidateFlowModel(); } },
-    chdCells: { deep: true, handler() { this.invalidateFlowModel(); } }
+    chdCells: { deep: true, handler() { this.invalidateFlowModel(); } },
+    rivCells: { deep: true, handler() { this.invalidateFlowModel(); } }
   },
   mounted() {
     if (!this.currentProject) {
@@ -713,6 +725,7 @@ export default {
       if (state.wells) this.wells = state.wells;
       if (state.kCells) this.kCells = state.kCells;
       if (state.chdCells) this.chdCells = state.chdCells;
+      if (state.rivCells) this.rivCells = state.rivCells;
       if (state.flowSettings) this.flowSettings = { ...this.flowSettings, ...state.flowSettings };
       if (state.rchData) this.rchData = state.rchData;
       if (state.evtData) this.evtData = state.evtData;
@@ -834,6 +847,7 @@ export default {
           wells: this.wells,
           kCells: this.kCells,
           chdCells: this.chdCells,
+          rivCells: this.rivCells,
           flowSettings: this.flowSettings,
           rchData: this.rchData,
           evtData: this.evtData,
@@ -861,6 +875,7 @@ export default {
             this.wells = [];
             this.kCells = [];
             this.chdCells = [];
+            this.rivCells = [];
             this.invalidateFlowModel();
             this.rchData = [];
             this.evtData = [];
@@ -892,6 +907,7 @@ export default {
           this.wells = [];
           this.kCells = [];
           this.chdCells = [];
+          this.rivCells = [];
           this.invalidateFlowModel();
           this.rchData = [];
           this.evtData = [];
@@ -977,7 +993,7 @@ export default {
         this.boundary = payload.coords || [];
         if (payload.geology_model) this.applyNormalizedGeologyModel(payload.geology_model);
         else this.clearGridModelState();
-        this.wells = []; this.kCells = []; this.chdCells = []; this.resultPoints = []; this.currentRun = null;
+        this.wells = []; this.kCells = []; this.chdCells = []; this.rivCells = []; this.resultPoints = []; this.currentRun = null;
         this.invalidateFlowModel();
         this.$message.success("边界加载成功");
     },
@@ -998,10 +1014,10 @@ export default {
     async onPreviewGrid(payload) {
       if (!this.ensureProjectContext('预览网格')) return;
       this.gridConfig = { ...this.gridConfig, ...((payload && payload.config) || {}) };
-      if (this.activeGridModelId && (this.wells.length > 0 || this.kCells.length > 0 || this.chdCells.length > 0)) {
+      if (this.activeGridModelId && (this.wells.length > 0 || this.kCells.length > 0 || this.chdCells.length > 0 || this.rivCells.length > 0)) {
         try {
           await this.$confirm(
-            '重新生成 Grid Model 会产生新的 cell_id，当前 WEL、CHD 和 K 单元选择将被清空。是否继续？',
+            '重新生成 Grid Model 会产生新的 cell_id，当前 WEL、CHD、RIV 和 K 单元选择将被清空。是否继续？',
             '重新生成网格',
             { type: 'warning' }
           );
@@ -1011,6 +1027,7 @@ export default {
         this.wells = [];
         this.kCells = [];
         this.chdCells = [];
+        this.rivCells = [];
         this.invalidateFlowModel();
       }
       await this.fetchGridPreview();
@@ -1077,15 +1094,20 @@ export default {
       const existingWell = this.wells.find(w => this.isSameGridCell(w, probe));
       const existingK = this.kCells.find(k => this.isSameGridCell(k, probe));
       const existingChd = this.chdCells.find(c => this.isSameGridCell(c, probe));
+      const existingRiv = this.rivCells.find(r => this.isSameGridCell(r, probe));
+      const existing = existingChd || existingRiv || existingK || existingWell;
       this.tempCell = {
         cell_id: data.cell_id,
         grid_model_id: data.grid_model_id || this.activeGridModelId,
         row: data.row, col: data.col, column: data.column !== undefined ? data.column : data.col, x: data.x, y: data.y,
-        layer: existingWell ? (existingWell.layer || 0) : (existingK ? (existingK.layer || 0) : (existingChd ? (existingChd.layer || 0) : 0)),
-        type: existingChd ? 'chd' : (existingK ? 'k_cell' : 'well'),
+        layer: existing ? (existing.layer || 0) : 0,
+        type: existingChd ? 'chd' : (existingRiv ? 'riv' : (existingK ? 'k_cell' : 'well')),
         rate: existingWell ? existingWell.rate : -1000,
         k_val: existingK ? existingK.k_val : 10.0,
-        head: existingChd ? existingChd.head : 10.0
+        head: existingChd ? existingChd.head : 10.0,
+        stage: existingRiv ? existingRiv.stage : 9.5,
+        conductance: existingRiv ? existingRiv.conductance : 10.0,
+        river_bottom: existingRiv ? existingRiv.river_bottom : 8.0
       };
       this.dialogVisible = true;
       this.activeStep = '4';
@@ -1095,19 +1117,41 @@ export default {
       this.wells = this.wells.filter(w => !this.isSameGridCell(w, target));
       this.kCells = this.kCells.filter(k => !this.isSameGridCell(k, target));
       this.chdCells = this.chdCells.filter(c => !this.isSameGridCell(c, target));
+      this.rivCells = this.rivCells.filter(r => !this.isSameGridCell(r, target));
       this.invalidateFlowModel();
       this.dialogVisible = false;
     },
     saveCellProperty() {
-      const { cell_id, grid_model_id, row, col, column, type, rate, k_val, head, layer, x, y } = this.tempCell;
+      const { cell_id, grid_model_id, row, col, column, type, rate, k_val, head, layer, x, y, stage, conductance, river_bottom } = this.tempCell;
       const target = { cell_id, row, col, layer };
+      const base = { cell_id, grid_model_id, row, col, column: column !== undefined ? column : col, layer, x, y };
+      let rivRecord = null;
+      if (type === 'riv') {
+        const stageNumber = Number(stage);
+        const conductanceNumber = Number(conductance);
+        const bottomNumber = Number(river_bottom);
+        if (!Number.isFinite(stageNumber) || !Number.isFinite(conductanceNumber) || !Number.isFinite(bottomNumber)) {
+          this.$message.error('RIV stage、conductance 和 river bottom 必须是有限数字');
+          return;
+        }
+        if (conductanceNumber <= 0) {
+          this.$message.error('RIV conductance 必须大于 0');
+          return;
+        }
+        if (stageNumber <= bottomNumber) {
+          this.$message.error('RIV stage 必须高于 river bottom');
+          return;
+        }
+        rivRecord = { ...base, stage: stageNumber, conductance: conductanceNumber, river_bottom: bottomNumber };
+      }
       this.wells = this.wells.filter(w => !this.isSameGridCell(w, target));
       this.kCells = this.kCells.filter(k => !this.isSameGridCell(k, target));
       this.chdCells = this.chdCells.filter(c => !this.isSameGridCell(c, target));
-      const base = { cell_id, grid_model_id, row, col, column: column !== undefined ? column : col, layer, x, y };
+      this.rivCells = this.rivCells.filter(r => !this.isSameGridCell(r, target));
       if (type === 'well') this.wells.push({ ...base, rate });
       else if (type === 'k_cell') this.kCells.push({ ...base, k_val });
-      else this.chdCells.push({ ...base, head });
+      else if (type === 'chd') this.chdCells.push({ ...base, head });
+      else if (type === 'riv') this.rivCells.push(rivRecord);
       this.invalidateFlowModel();
       this.dialogVisible = false;
     },
@@ -1123,15 +1167,17 @@ export default {
     handleAttributeDelete(target) {
       if (target.type === 'well') this.wells = this.wells.filter(w => !this.isSameGridCell(w, target));
       else if (target.type === 'k_cell') this.kCells = this.kCells.filter(k => !this.isSameGridCell(k, target));
-      else this.chdCells = this.chdCells.filter(c => !this.isSameGridCell(c, target));
+      else if (target.type === 'chd') this.chdCells = this.chdCells.filter(c => !this.isSameGridCell(c, target));
+      else if (target.type === 'riv') this.rivCells = this.rivCells.filter(r => !this.isSameGridCell(r, target));
       this.invalidateFlowModel();
     },
-    handleClearAllAttributes() { this.wells = []; this.kCells = []; this.chdCells = []; this.invalidateFlowModel(); },
+    handleClearAllAttributes() { this.wells = []; this.kCells = []; this.chdCells = []; this.rivCells = []; this.invalidateFlowModel(); },
     handleAttributeTypeChange(rowData) {
       const { newType } = rowData;
       const source = this.wells.find(item => this.isSameGridCell(item, rowData))
         || this.kCells.find(item => this.isSameGridCell(item, rowData))
         || this.chdCells.find(item => this.isSameGridCell(item, rowData))
+        || this.rivCells.find(item => this.isSameGridCell(item, rowData))
         || rowData;
       this.handleAttributeDelete({ ...rowData, type: rowData.type });
       const base = {
@@ -1146,7 +1192,8 @@ export default {
       };
       if (newType === 'well') this.wells.push({ ...base, rate: -1000 });
       else if (newType === 'k_cell') this.kCells.push({ ...base, k_val: 10.0 });
-      else this.chdCells.push({ ...base, head: 10.0 });
+      else if (newType === 'chd') this.chdCells.push({ ...base, head: 10.0 });
+      else if (newType === 'riv') this.rivCells.push({ ...base, stage: 9.5, conductance: 10.0, river_bottom: 8.0 });
       this.invalidateFlowModel();
     },
     handleRchEvtUpdate(data) {
@@ -1210,7 +1257,19 @@ export default {
               name: `Well ${index + 1}`,
               cell_id: cell.cell_id,
               rate: Number(cell.rate)
-            }))
+            })),
+          riv: this.rivCells.length > 0 ? [{
+            boundary_id: 'selected_riv_cells',
+            name: 'Selected RIV cells',
+            cells: this.rivCells
+              .filter(cell => cell.cell_id)
+              .map(cell => ({
+                cell_id: cell.cell_id,
+                stage: Number(cell.stage),
+                conductance: Number(cell.conductance),
+                river_bottom: Number(cell.river_bottom)
+              }))
+          }] : []
         },
         solver: {
           complexity: 'COMPLEX',
@@ -1240,7 +1299,7 @@ export default {
       if (!this.flowCheck || !this.flowCheck.runnable) {
         const errors = this.flowCheck && this.flowCheck.diagnostics ? this.flowCheck.diagnostics.errors || [] : [];
         this.currentLogs = errors.map(item => `${item.code}: ${item.message}`).join('\n');
-        this.$message.error('Flow Model 检查未通过，请先补齐 CHD/WEL/K/IC 配置');
+        this.$message.error('Flow Model 检查未通过，请先补齐 CHD/WEL/RIV/K/IC 配置');
         return null;
       }
       const response = this.currentFlowModel && this.currentFlowModel.flow_model_id
@@ -1310,6 +1369,11 @@ export default {
     formatRunSummary(run) {
       if (!run) return '';
       const budget = run.water_budget || {};
+      const packageBudget = run.package_budget || {};
+      const packageLines = (packageBudget.packages || []).map(item => {
+        if (!item.available) return `Package ${item.name}: unavailable`;
+        return `Package ${item.name}: in=${item.in}, out=${item.out}, net=${item.net}`;
+      });
       const error = run.error ? `${run.error.code}: ${run.error.message}` : '';
       return [
         `Run: ${run.run_id}`,
@@ -1319,6 +1383,7 @@ export default {
         `Converged: ${run.convergence ? run.convergence.converged : '-'}`,
         `Water budget in/out: ${budget.total_in} / ${budget.total_out}`,
         `Percent discrepancy: ${budget.percent_discrepancy}`,
+        ...packageLines,
         error
       ].filter(Boolean).join('\n');
     },

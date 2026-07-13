@@ -19,12 +19,13 @@
 
       <el-collapse-item name="4">
         <template slot="title">
-          <span class="step-title"><i class="el-icon-menu"></i> Step 4: 网格属性 (井/K)</span>
+          <span class="step-title"><i class="el-icon-menu"></i> Step 4: 网格属性 (WEL/CHD/RIV/K)</span>
         </template>
         <AttributeManager 
           :wells="wells" 
           :kCells="kCells" 
           :chdCells="chdCells"
+          :rivCells="rivCells"
           @delete-attribute="(val) => $emit('delete-attribute', val)"
           @type-change="(val) => $emit('type-change', val)" 
           @clear-all="$emit('clear-all')" 
@@ -102,6 +103,7 @@ export default {
     wells: { type: Array, default: () => [] },
     kCells: { type: Array, default: () => [] },
     chdCells: { type: Array, default: () => [] },
+    rivCells: { type: Array, default: () => [] },
     flowCheck: { type: Object, default: null },
     packagePreview: { type: Object, default: null },
     canRunFlow: { type: Boolean, default: false },

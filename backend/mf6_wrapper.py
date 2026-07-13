@@ -75,9 +75,21 @@ class MF6Builder:
                             chd_data.append([(0, i, j), float(b_cfg.get('head_start', 10)) + (
                                         float(b_cfg.get('head_end', 10)) - float(b_cfg.get('head_start', 10))) * ratio])
                         elif b_type == 'RIV':
-                            stg = float(b_cfg.get('stage_start', 10)) + (
-                                        float(b_cfg.get('stage_end', 10)) - float(b_cfg.get('stage_start', 10))) * ratio
-                            riv_data.append([(0, i, j), stg, 100, 5])
+                            required = ('stage_start', 'stage_end', 'cond_start', 'cond_end', 'rbot_start', 'rbot_end')
+                            missing = [key for key in required if b_cfg.get(key) in (None, '')]
+                            if missing:
+                                raise ValueError(
+                                    "Legacy line RIV boundary requires explicit stage, conductance, and river bottom "
+                                    f"parameters; missing: {', '.join(missing)}"
+                                )
+                            stg = float(b_cfg['stage_start']) + (float(b_cfg['stage_end']) - float(b_cfg['stage_start'])) * ratio
+                            cond = float(b_cfg['cond_start']) + (float(b_cfg['cond_end']) - float(b_cfg['cond_start'])) * ratio
+                            rbot = float(b_cfg['rbot_start']) + (float(b_cfg['rbot_end']) - float(b_cfg['rbot_start'])) * ratio
+                            if cond <= 0:
+                                raise ValueError("Legacy line RIV conductance must be greater than 0")
+                            if stg <= rbot:
+                                raise ValueError("Legacy line RIV stage must be greater than river bottom")
+                            riv_data.append([(0, i, j), stg, cond, rbot])
 
         # ⭐ 核心防崩修复 2：剥离 IC（初始条件）包与 CHD 的绑定逻辑
         # 无论有没有设置定水头边界，初始水位 (strt) 都必须强制设为地表的真实标高 (top_layer)

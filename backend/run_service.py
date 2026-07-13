@@ -180,7 +180,8 @@ class RunService:
                 )
 
             manifest = self.run_store.transition(manifest, STATUS_POSTPROCESSING)
-            logical_files = self._logical_output_files()
+            package_names = list((manifest.get("model") or {}).get("packages") or [])
+            logical_files = self._logical_output_files(package_names)
             outputs = register_run_files(run_root, logical_files)
             convergence = parse_listing_files(run_root, ["input/mfsim.lst", "input/gwf.lst"])
             manifest = self._update_manifest(
@@ -211,6 +212,7 @@ class RunService:
             water_budget, package_budget = read_water_budget(
                 input_dir / "gwf.bud",
                 input_dir / "gwf.lst",
+                package_names=self._budget_package_names(package_names),
                 time_unit=units.get("time", "day"),
                 flow_unit=units.get("flow", "m3/day"),
             )
@@ -379,8 +381,9 @@ class RunService:
         first_line = text.splitlines()[0].strip()
         return first_line[:120]
 
-    def _logical_output_files(self):
-        return {
+    def _logical_output_files(self, package_names=None):
+        package_names = set(package_names or [])
+        files = {
             "simulation_listing": "input/mfsim.lst",
             "model_listing": "input/gwf.lst",
             "head": "input/gwf.hds",
@@ -390,11 +393,20 @@ class RunService:
             "dis": "input/gwf.dis",
             "npf": "input/gwf.npf",
             "chd": "input/gwf.chd",
-            "wel": "input/gwf.wel",
             "ims": "input/sim.ims",
             "stdout": "logs/mf6_stdout.txt",
             "stderr": "logs/mf6_stderr.txt",
         }
+        if "WEL" in package_names:
+            files["wel"] = "input/gwf.wel"
+        if "RIV" in package_names:
+            files["riv"] = "input/gwf.riv"
+        return files
+
+    def _budget_package_names(self, package_names):
+        supported = ("CHD", "WEL", "RIV")
+        present = set(package_names or [])
+        return tuple(name for name in supported if name in present)
 
     def _has_nonblocking_warnings(self, manifest):
         checker = manifest.get("checker") or {}

@@ -1,3 +1,19 @@
+# 2026-07-13 RIV Boundary v1 Update
+
+Resolved or reduced:
+
+- Formal `flow_model_v1` now supports cell-based RIV with explicit stage, conductance, and river bottom.
+- The frontend line-boundary RIV option is disabled for new formal RIV input; users create RIV as grid-cell attributes.
+- The legacy line RIV adapter no longer writes hidden `conductance=100` and `river_bottom=5`; missing values are rejected.
+- Run manifests include RIV output registration and RIV package-budget diagnostics when RIV exists.
+
+Remaining RIV-related debt:
+
+- No line/polyline/river-network-to-cell RIV mapping.
+- No RIV time series or multi-stress-period period data.
+- No RIV import/export table workflow.
+- No RIV-specific UI bulk editing or conflict-resolution workflow beyond basic cell editing.
+
 # 2026-07-13 Flow Model v1 Update
 
 Resolved or reduced:
@@ -11,7 +27,7 @@ Remaining high-priority debt:
 
 - `run_manifest_v1` and persistent run history now exist for the formal steady-flow path only.
 - Main application formal run responses now provide structured convergence, water-budget, package-budget, and output-registry summaries.
-- RIV, DRN, GHB, RCH, and EVT are not part of the formal Flow Model.
+- DRN, GHB, RCH, and EVT are not part of the formal Flow Model.
 - MODPATH executable configuration is still out of scope for this update.
 - The legacy `/run-model` adapter remains behind `allow_legacy_flow_model=true` and should be removed after remaining packages are migrated.
 
@@ -25,10 +41,10 @@ Remaining high-priority debt:
 
 现象：
 
-- `BoundaryPanel.vue` 提供 CHD、RIV、DRN、GHB。
-- `mf6_wrapper.py` 只创建 CHD 和 RIV。
+- `BoundaryPanel.vue` 提供 CHD、DRN、GHB；RIV 新建入口已改为 cell editor。
+- `mf6_wrapper.py` legacy adapter 只创建 CHD 和显式参数 RIV。
 - DRN/GHB 没有创建 package。
-- RIV 的 `cond_start/cond_end/rbot_start/rbot_end` UI 字段没有进入后端，后端固定为 `100` 和 `5`。
+- legacy line-based RIV 仍不是正式建模路径；正式 RIV 已迁移为 cell-based Flow Model。
 - `RchEvtManager.vue` 调用 `/upload-scatter`，后端没有该 API。
 - 后端 `/upload-zone` 已实现但 UI 未接入。
 
@@ -41,7 +57,7 @@ Remaining high-priority debt:
 
 - 建立“UI 字段到 FloPy package 字段”的测试。
 - 未实现的 UI 先禁用或标记为不可用。
-- 优先修复 RIV 参数、DRN/GHB package、RCH/EVT 数据结构。
+- 优先修复 DRN/GHB package、RCH/EVT 数据结构，并后续补充 RIV line-to-cell 概念模型。
 
 ### 可执行文件路径不可复现
 
@@ -119,23 +135,23 @@ Remaining high-priority debt:
 - 增加插值输出 benchmark，验证重建结果和 artifact 一致。
 - 多进程/多用户前再引入数据库或共享缓存。
 
-### Flow Model schema 尚未建立
+### Flow Model schema 仍需扩展
 
 现象：
 
-- `Project`、`GeologyModel` 和 `GridModel` 已建立正式 schema。
-- `/run-model` 已强制使用 `grid_model_id` 和 Grid Store 中的 `top/botm/idomain`。
-- IC、NPF、CHD、WEL、RCH、EVT、RIV 等参数仍通过 legacy 请求体和前端 state 传入。
+- `Project`、`GeologyModel`、`GridModel`、`FlowModel` 和 `RunManifest` 已建立第一阶段正式 schema。
+- 正式 Flow Model 已覆盖 IC、NPF、CHD、WEL、RIV、IMS 和 OC。
+- RCH、EVT、DRN、GHB、STO、transient period data 等仍未迁移。
 
 风险：
 
-- 保存/打开项目后仍不能保证复现同一套 MF6 package 输入。
-- UI 字段到 FloPy package 字段缺少统一 schema 和写入测试。
+- 对未迁移 package，保存/打开项目后仍不能保证复现同一套 MF6 package 输入。
+- 未迁移 UI 字段到 FloPy package 字段缺少统一 schema 和写入测试。
 
 建议：
 
-- 下一步建立 `flow_model_v1` 和最小 Model Checker。
-- 先覆盖稳定流 IC/NPF/CHD/WEL，再扩展 RIV/DRN/GHB/RCH/EVT。
+- 下一步选择 GHB 或 DRN 做最小垂直切片。
+- 按 RIV 模式扩展 schema、checker、API、FloPy 写入、run diagnostics、UI 和 benchmark。
 - 每个 package 都要有 schema、API、序列化、FloPy 写入和基准测试。
 
 ## High
@@ -155,7 +171,7 @@ Remaining high-priority debt:
 
 建议：
 
-- 建立 `flow_model_v1` 后，把井、K、CHD/RIV/DRN/GHB/RCH/EVT 全部迁移到明确 cell/geometry reference。
+- 已建立 `flow_model_v1` 的 IC/K/CHD/WEL/RIV；继续把 DRN/GHB/RCH/EVT 迁移到明确 cell/geometry reference。
 - 对重建 grid 后的旧引用提供 Model Checker 提示和批量清理。
 
 ### CRS 和单位缺失
@@ -349,4 +365,4 @@ Remaining high-priority debt:
 2. 为主应用运行增加正式 run manifest 和清理策略。
 3. 修复 MODPATH 路径配置和启动自检。
 4. 禁用或补齐 UI-only 功能：DRN/GHB/RCH/EVT/MODPATH。
-5. 将更多 package 纳入标准模型回归测试。
+5. 将 GHB/DRN/RCH/EVT 纳入标准模型回归测试。

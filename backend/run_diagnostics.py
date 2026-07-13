@@ -147,12 +147,13 @@ def read_water_budget(
     budget_file: Path,
     model_listing_file: Path,
     *,
+    package_names=("CHD", "WEL"),
     time_unit="day",
     flow_unit="m3/day",
     percent_tolerance=1.0e-5,
     absolute_tolerance=1.0e-7,
 ) -> Tuple[Dict, Dict]:
-    package_budget = read_package_budget(budget_file)
+    package_budget = read_package_budget(budget_file, package_names=package_names)
     if package_budget["state"] != "available":
         return {
             "state": "unavailable",
@@ -176,8 +177,10 @@ def read_water_budget(
     total_out = float(sum(item["out"] for item in available))
     difference = total_in - total_out
     percent_discrepancy = parse_percent_discrepancy(model_listing_file)
+    missing_packages = [item["name"] for item in package_budget["packages"] if not item.get("available")]
     within = (
         percent_discrepancy is not None
+        and not missing_packages
         and abs(percent_discrepancy) <= percent_tolerance
         and abs(difference) <= absolute_tolerance
     )
@@ -187,6 +190,13 @@ def read_water_budget(
         package_budget.setdefault("warnings", []).append({
             "code": "RUN_PERCENT_DISCREPANCY_MISSING",
             "message": "Could not read percent discrepancy from model listing.",
+        })
+    elif missing_packages:
+        state = "unavailable"
+        package_budget.setdefault("warnings", []).append({
+            "code": "RUN_REQUIRED_PACKAGE_BUDGET_MISSING",
+            "packages": missing_packages,
+            "message": "One or more expected package budgets are missing.",
         })
     return {
         "state": state,

@@ -2,6 +2,10 @@
 
 Updated: 2026-07-13
 
+## 2026-07-13 RIV Budget Update
+
+The run manifest now registers RIV artifacts and package-budget totals when a saved Flow Model contains RIV records. Expected package inputs are dynamic: `gwf.wel` is required only when WEL exists, and `gwf.riv` is required only when RIV exists. Package budgets are read only for packages present in the compiled model, so absent packages are not reported as fake zero budgets.
+
 This document describes `run_manifest_v1`, the first persistent run contract for the formal MODFLOW 6 steady-flow path.
 
 ## Purpose
@@ -27,7 +31,8 @@ backend/projects/<project_id>/runs/<run_id>/
     *.ic
     *.npf
     *.chd
-    *.wel
+    *.wel       # only when WEL is present
+    *.riv       # only when RIV is present
     *.oc
     *.lst
     *.hds
@@ -160,13 +165,16 @@ percent_discrepancy_tol = 1e-5
 
 ## Package Budget
 
-The first package budget summary reports CHD and WEL totals from the cell-budget file:
+The package budget summary reports present CHD, WEL, and RIV totals from the cell-budget file:
 
 ```json
 {
   "package_budget": {
-    "CHD": {"in": 3.0, "out": 2.0, "net": 1.0},
-    "WEL": {"in": 0.0, "out": 1.0, "net": -1.0}
+    "packages": [
+      {"name": "CHD", "available": true, "in": 3.0, "out": 2.0, "net": 1.0},
+      {"name": "WEL", "available": true, "in": 0.0, "out": 1.0, "net": -1.0},
+      {"name": "RIV", "available": true, "in": 0.8, "out": 0.0, "net": 0.8}
+    ]
   }
 }
 ```
@@ -181,7 +189,7 @@ The manifest registers expected outputs and verifies that the important binary/t
 - model listing file such as `gwf.lst`;
 - head file such as `gwf.hds`;
 - budget file such as `gwf.bud`;
-- package inputs such as `.dis`, `.npf`, `.chd`, `.wel`, `.oc`, `.ims`.
+- package inputs such as `.dis`, `.npf`, `.chd`, `.wel`, `.riv`, `.oc`, `.ims`.
 
 Each entry stores a logical path, role, existence, size in bytes, and SHA-256 checksum when available.
 
@@ -232,8 +240,10 @@ Successful response:
       "percent_discrepancy": 0.0
     },
     "package_budget": {
-      "CHD": {"in": 3.0, "out": 2.0, "net": 1.0},
-      "WEL": {"in": 0.0, "out": 1.0, "net": -1.0}
+      "packages": [
+        {"name": "CHD", "available": true, "in": 3.0, "out": 2.0, "net": 1.0},
+        {"name": "WEL", "available": true, "in": 0.0, "out": 1.0, "net": -1.0}
+      ]
     },
     "outputs": {
       "head": "input/gwf.hds",

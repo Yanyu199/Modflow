@@ -1,15 +1,28 @@
+# 2026-07-13 RIV Boundary v1 Update
+
+The RIV vertical slice recommended by the previous roadmap is now implemented for the first steady-flow scope:
+
+- `flow_model_v1.boundaries.riv`.
+- RIV schema validation and Model Checker diagnostics.
+- Frontend cell-based RIV editing.
+- `ModflowGwfriv` package creation and `gwf.riv` artifact registration.
+- RIV package-budget diagnostics in `run_manifest_v1`.
+- Two numerical benchmark branches: head above river bottom and bottom-limited exchange.
+
+The next smallest vertical source/sink task should be GHB or DRN, not Grid Model or transient flow. RIV conceptual line/river-network import should remain a later enhancement after more cell-based packages are stable.
+
 # 2026-07-13 Flow Model v1 Update
 
 Phase 1 now has a first vertical slice for persistent single-period steady flow:
 
 - `flow_model_v1` schema/store/service.
-- Model Checker for IC, NPF, CHD, WEL, IMS, and OC.
-- Package compiler that builds TDIS, IMS, GWF, DIS, IC, NPF, CHD, WEL, and OC from Grid Store and Flow Store.
+- Model Checker for IC, NPF, CHD, WEL, RIV, IMS, and OC.
+- Package compiler that builds TDIS, IMS, GWF, DIS, IC, NPF, CHD, WEL, RIV, and OC from Grid Store and Flow Store.
 - Formal `/run-model` path based on `flow_model_id`.
 - End-to-end benchmark through Project/Grid/Flow/Checker/Compiler/MF6.
-- Frontend Flow page path: select WEL/K/CHD cells, save/check Flow Model, then run.
+- Frontend Flow page path: select WEL/K/CHD/RIV cells, save/check Flow Model, then run.
 
-`run_manifest_v1` and the first structured numerical acceptance report are now implemented for the formal steady-flow path. The next smallest vertical task should be one additional boundary package, preferably RIV, implemented end to end through schema, validation, FloPy package creation, package-budget diagnostics, UI wiring, and a small benchmark.
+`run_manifest_v1` and the first structured numerical acceptance report are now implemented for the formal steady-flow path. The next smallest vertical task should be one additional boundary package, preferably GHB or DRN, implemented end to end through schema, validation, FloPy package creation, package-budget diagnostics, UI wiring, and a small benchmark.
 
 # Roadmap
 
@@ -116,7 +129,7 @@ Phase 1 now has a first vertical slice for persistent single-period steady flow:
 
 功能范围：
 
-- 完整实现 RIV、DRN、GHB。
+- 完整实现 DRN、GHB，并扩展 RIV 的导入/概念模型能力。
 - 统一 RCH/EVT 数据结构，支持面分区；散点插值如保留，需明确算法和验证。
 - 支持 package 参数的层选择和单位检查。
 - 每个 package 提供 MF6 输入文件检查测试。
@@ -129,13 +142,13 @@ Phase 1 now has a first vertical slice for persistent single-period steady flow:
 验收标准：
 
 - UI 中每个字段都能追踪到 FloPy package 的 stress period data。
-- RIV 的 stage/cond/rbot 不再硬编码。
+- RIV 的 stage/cond/rbot 已在正式 cell-based Flow Model 中实现；后续需要线/面导入和时间序列。
 - DRN/GHB 创建对应 package，并在结果 budget 中出现。
 - RCH/EVT 上传接口和 UI 一致。
 
 数值基准：
 
-- RIV/DRN/GHB/RCH/EVT 各自一个小型标准模型。
+- DRN/GHB/RCH/EVT 各自一个小型标准模型；RIV 已有首版两分支基准，后续可增加概念河网导入基准。
 - package budget 的流入/流出方向和数量级有手算或官方示例对照。
 
 主要风险：
@@ -265,10 +278,10 @@ Phase 1 now has a first vertical slice for persistent single-period steady flow:
 
 ## 推荐的下一个开发任务
 
-建议下一个开发任务是：建立 `flow_model_v1` 和最小 Model Checker，先覆盖稳定流 IC/NPF/CHD/WEL。
+建议下一个开发任务是：建立 GHB 或 DRN 的最小垂直切片，先覆盖 schema、Model Checker、FloPy package、package budget、UI 单元编辑和一个小型数值基准。
 
 原因：
 
-- 它承接当前 `project/geology/grid` 三个 schema。
-- 它能把当前 `/run-model` legacy adapter 中的 IC/NPF/CHD/WEL 参数正式持久化。
-- 它是 package 写入测试、水量平衡验收和保存/打开复现 MF6 输入文件的前置条件。
+- 它承接当前 `project/geology/grid/flow/run` 五个 schema。
+- 它能继续削减 legacy `/run-model` adapter 中的边界 package。
+- 它能复用 RIV 垂直切片的 package 写入、budget 诊断和 benchmark 模式。

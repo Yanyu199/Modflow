@@ -1,3 +1,27 @@
+# 2026-07-13 RIV Boundary v1 Update
+
+Current formal RIV path:
+
+```mermaid
+flowchart LR
+  Browser["Vue Flow cell editor"]
+  Payload["flow_model_v1 boundaries.riv"]
+  Checker["Flow Model Checker"]
+  Compiler["FloPy ModflowGwfriv"]
+  MF6["MODFLOW 6"]
+  Budget["Cell-budget RIV records"]
+  Manifest["run_manifest_v1"]
+
+  Browser --> Payload
+  Payload --> Checker
+  Checker --> Compiler
+  Compiler -->|gwf.riv| MF6
+  MF6 --> Budget
+  Budget --> Manifest
+```
+
+RIV is now an explicit grid-cell boundary in the formal steady-flow path. Line-to-grid river conceptualization is still a future task; the legacy line-boundary adapter no longer supplies hidden conductance or river-bottom defaults.
+
 # 2026-07-13 Run Manifest v1 Update
 
 Current formal run path:
@@ -61,7 +85,7 @@ flowchart LR
   FlowAPI --> FlowStore
   FlowAPI --> Checker
   Checker --> Compiler
-  Compiler -->|TDIS IMS GWF DIS IC NPF CHD WEL OC| MF6
+  Compiler -->|TDIS IMS GWF DIS IC NPF CHD WEL RIV OC| MF6
   MF6 -->|hds bud lst| Post
   Post --> Browser
 ```
@@ -227,10 +251,10 @@ flowchart LR
 - `k_cells` 可覆盖指定层或全层同一 row/col
 - `ModflowGwfnpf(k=k_array, save_specific_discharge=True, icelltype=1)`
 
-`setup_boundary_conditions()`：
+`setup_boundary_conditions()` legacy adapter:
 
 - CHD：沿用户选择的边界线附近单元创建 `ModflowGwfchd`，只在 layer 0。
-- RIV：沿边界线创建 `ModflowGwfriv`，stage 使用 UI 起终点插值，但 cond 固定为 `100`，rbot 固定为 `5`，只在 layer 0。
+- RIV：沿边界线创建 `ModflowGwfriv`，stage、conductance 和 river bottom 均必须显式提供；不再使用隐藏默认 `100/5`。该路径仍只在 layer 0，正式 RIV 工作流应使用 `flow_model_v1.boundaries.riv`。
 - DRN/GHB：列表变量存在，但没有创建 `ModflowGwfdrn` 或 `ModflowGwfghb`。
 - WEL：按前端 row/col/layer/rate 创建 `ModflowGwfwel`。
 - RCH：当 `rch_array > 0` 时创建 `ModflowGwfrcha`。
@@ -251,10 +275,9 @@ flowchart LR
 
 限制：
 
-- 不返回 `.nam/.dis/.npf/.lst/.hds/.bud` 的持久化引用。
-- 不解析收敛状态、outer/inner iteration、percent discrepancy。
-- 不提供全模型水量平衡。
-- `shutil.rmtree(WORK_DIR)` 使失败复盘和标准回归测试困难。
+- 正式 Run API 已提供 `.nam/.dis/.npf/.lst/.hds/.bud` 等逻辑文件注册、收敛状态、总体水量平衡、package budget 和 percent discrepancy。
+- 旧 `/run-model` legacy adapter 仍存在，不应作为新增 package 的目标路径。
+- outer/inner iteration 细节尚未结构化解析。
 
 ## MODPATH 当前流程
 
@@ -315,6 +338,15 @@ flowchart LR
 | `GET /projects/<project_id>/grids/<grid_model_id>/cells/<cell_id>` | 是 | 是 | 返回后端权威 cell detail |
 | `GET /projects/<project_id>/grids/<grid_model_id>/render-data` | 是 | 是 | 返回 2D/3D 渲染数据和稳定 cell_id |
 | `POST /projects/<project_id>/grids/<grid_model_id>/rebuild` | 否 | 是 | 用原 generation 重建新 active grid |
+| `POST /projects/<project_id>/flow-models/validate` | 是 | 是 | 验证 IC/NPF/CHD/WEL/RIV/solver/output control |
+| `POST /projects/<project_id>/flow-models` | 是 | 是 | 创建 active Flow Model 并持久化 |
+| `GET /projects/<project_id>/flow-models/active` | 间接 | 是 | 读取 active Flow Model |
+| `PUT /projects/<project_id>/flow-models/<flow_model_id>` | 是 | 是 | 更新 active Flow Model |
+| `GET /projects/<project_id>/flow-models/<flow_model_id>/package-preview` | 是 | 是 | 返回 package summary，包括 RIV summary |
+| `POST /projects/<project_id>/runs` | 是 | 是 | 运行 formal Flow Model 并生成 run manifest |
+| `GET /projects/<project_id>/runs` | 是 | 是 | 查询 run history |
+| `GET /projects/<project_id>/runs/<run_id>` | 间接 | 是 | 查询完整 run manifest |
+| `GET /projects/<project_id>/runs/<run_id>/summary` | 是 | 是 | 查询运行摘要 |
 | `POST /upload-zone` | 否 | 是 | 后端已实现但 UI 未接入 |
 | `POST /upload-scatter` | 是 | 否 | UI 已存在但后端未实现 |
 | `POST /preview-geometry` | 兼容 | 是 | 兼容 wrapper；内部创建 Grid Model |
@@ -329,8 +361,9 @@ flowchart LR
 | 地质模型标准数据 | `backend/projects/<project_id>/geology/geology_model.json` | active geology model 已持久化；派生面数组仍采用可重建策略 |
 | 网格模型 manifest/artifact | `backend/projects/<project_id>/grid/grid_model.json` 和 `grid/artifacts/grid_arrays.npz` | active grid 已持久化并校验 checksum；历史 grid/run 关联待实现 |
 | 钻孔地质模型缓存 | Flask 全局 `GEO_MODELS[project_id]` | 项目间隔离；可由持久化 geology model 重建 |
-| 井、K、RCH/EVT 和边界条件 | `App.vue` 内存和前端项目包 | 井/K 已逐步使用 `cell_id`；正式 Flow schema 待实现 |
-| 运行输入/输出 | `backend/workspace/<run-id>` | 失败默认保留；成功保留可配置；正式 run history 待实现 |
+| IC/K/CHD/WEL/RIV | `backend/projects/<project_id>/flow/flow_model.json` 和前端当前编辑态 | 第一阶段正式 Flow schema 已实现；RCH/EVT/DRN/GHB 尚未迁移 |
+| RCH/EVT 和 legacy line boundaries | `App.vue` 内存和 legacy adapter | 尚未纳入正式 Flow schema |
+| 运行输入/输出 | `backend/projects/<project_id>/runs/<run_id>/` | 正式 run manifest/history 已实现第一阶段；清理和下载 UI 仍待完善 |
 | 前端项目文件 | 浏览器下载 `modflow_project_bundle` JSON | 新格式包含 `project`、`geology_model` 和流场 UI state |
 | MF6/MODPATH 可执行路径 | `mf6_executable.py` / `mf6_wrapper.py` | MF6 已统一解析；MODPATH 仍是后续技术债 |
 

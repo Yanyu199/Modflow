@@ -1,18 +1,18 @@
 <template>
   <div class="attribute-manager">
     <div class="header">
-      <h3>网格属性管理 ({{ totalCount }})</h3>
+      <h3>Cell Attributes ({{ totalCount }})</h3>
       <el-button
         v-if="totalCount > 0"
         type="text"
         size="mini"
         class="clear-btn"
         @click="$emit('clear-all')"
-      >清空全部</el-button>
+      >Clear all</el-button>
     </div>
 
     <div v-if="totalCount === 0" class="empty-tip">
-      暂无已配置的网格，请在地图上点击设置 WEL、CHD 或 K。
+      No configured cells. Click a grid cell to set WEL, CHD, RIV, or K.
     </div>
 
     <el-table
@@ -20,18 +20,18 @@
       :data="combinedList"
       style="width: 100%"
       size="mini"
-      height="250"
+      height="280"
       border
       stripe
     >
-      <el-table-column label="坐标" width="110">
+      <el-table-column label="Cell" width="110">
         <template slot-scope="scope">
           <span class="cell-label">L{{ scope.row.layer || 0 }} R{{ scope.row.row }} C{{ scope.row.col }}</span>
           <div v-if="scope.row.cell_id" class="cell-id-mini">{{ scope.row.cell_id }}</div>
         </template>
       </el-table-column>
 
-      <el-table-column label="类型" width="110">
+      <el-table-column label="Type" width="96">
         <template slot-scope="scope">
           <el-select
             v-model="scope.row.type"
@@ -41,11 +41,12 @@
             <el-option label="WEL" value="well"></el-option>
             <el-option label="K" value="k_cell"></el-option>
             <el-option label="CHD" value="chd"></el-option>
+            <el-option label="RIV" value="riv"></el-option>
           </el-select>
         </template>
       </el-table-column>
 
-      <el-table-column label="参数值">
+      <el-table-column label="Values">
         <template slot-scope="scope">
           <el-input-number
             v-if="scope.row.type === 'well'"
@@ -67,7 +68,7 @@
             placeholder="K"
           ></el-input-number>
           <el-input-number
-            v-else
+            v-else-if="scope.row.type === 'chd'"
             v-model="scope.row.dataRef.head"
             :step="0.1"
             size="mini"
@@ -75,6 +76,33 @@
             controls-position="right"
             placeholder="Head"
           ></el-input-number>
+          <div v-else class="riv-editor">
+            <el-input-number
+              v-model="scope.row.dataRef.stage"
+              :step="0.1"
+              size="mini"
+              style="width: 100%"
+              controls-position="right"
+              placeholder="Stage (m)"
+            ></el-input-number>
+            <el-input-number
+              v-model="scope.row.dataRef.conductance"
+              :step="1"
+              :min="0.000001"
+              size="mini"
+              style="width: 100%; margin-top: 4px;"
+              controls-position="right"
+              placeholder="Conductance (m2/day)"
+            ></el-input-number>
+            <el-input-number
+              v-model="scope.row.dataRef.river_bottom"
+              :step="0.1"
+              size="mini"
+              style="width: 100%; margin-top: 4px;"
+              controls-position="right"
+              placeholder="River bottom (m)"
+            ></el-input-number>
+          </div>
         </template>
       </el-table-column>
 
@@ -100,57 +128,44 @@ export default {
   props: {
     wells: { type: Array, default: () => [] },
     kCells: { type: Array, default: () => [] },
-    chdCells: { type: Array, default: () => [] }
+    chdCells: { type: Array, default: () => [] },
+    rivCells: { type: Array, default: () => [] }
   },
   computed: {
     totalCount() {
-      return this.wells.length + this.kCells.length + this.chdCells.length;
+      return this.wells.length + this.kCells.length + this.chdCells.length + this.rivCells.length;
     },
     combinedList() {
       const list = [];
       this.wells.forEach(w => {
-        list.push({
-          id: `w-${w.layer || 0}-${w.row}-${w.col}`,
-          row: w.row,
-          col: w.col,
-          column: w.column,
-          layer: w.layer || 0,
-          cell_id: w.cell_id,
-          grid_model_id: w.grid_model_id,
-          type: 'well',
-          dataRef: w
-        });
+        list.push(this.rowItem('well', `w-${w.layer || 0}-${w.row}-${w.col}`, w));
       });
       this.kCells.forEach(k => {
-        list.push({
-          id: `k-${k.layer || 0}-${k.row}-${k.col}`,
-          row: k.row,
-          col: k.col,
-          column: k.column,
-          layer: k.layer || 0,
-          cell_id: k.cell_id,
-          grid_model_id: k.grid_model_id,
-          type: 'k_cell',
-          dataRef: k
-        });
+        list.push(this.rowItem('k_cell', `k-${k.layer || 0}-${k.row}-${k.col}`, k));
       });
       this.chdCells.forEach(c => {
-        list.push({
-          id: `chd-${c.layer || 0}-${c.row}-${c.col}`,
-          row: c.row,
-          col: c.col,
-          column: c.column,
-          layer: c.layer || 0,
-          cell_id: c.cell_id,
-          grid_model_id: c.grid_model_id,
-          type: 'chd',
-          dataRef: c
-        });
+        list.push(this.rowItem('chd', `chd-${c.layer || 0}-${c.row}-${c.col}`, c));
+      });
+      this.rivCells.forEach(r => {
+        list.push(this.rowItem('riv', `riv-${r.layer || 0}-${r.row}-${r.col}`, r));
       });
       return list.sort((a, b) => (a.layer - b.layer) || (a.row - b.row) || (a.col - b.col));
     }
   },
   methods: {
+    rowItem(type, id, ref) {
+      return {
+        id,
+        row: ref.row,
+        col: ref.col,
+        column: ref.column,
+        layer: ref.layer || 0,
+        cell_id: ref.cell_id,
+        grid_model_id: ref.grid_model_id,
+        type,
+        dataRef: ref
+      };
+    },
     onDelete(row) {
       this.$emit('delete-attribute', {
         type: row.type,
@@ -218,5 +233,8 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.riv-editor {
+  min-width: 0;
 }
 </style>

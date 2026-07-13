@@ -1,5 +1,95 @@
 # Benchmarks
 
+## RIV Boundary Benchmarks
+
+Updated: 2026-07-13
+
+The first formal RIV benchmark exercises the application data path:
+
+```text
+ProjectStore
+-> GridModelStore fixture
+-> flow_model_v1 boundaries.riv
+-> Model Checker
+-> FloPy ModflowGwfriv
+-> MODFLOW 6 process
+-> run_manifest_v1
+-> RIV package-budget diagnostics
+```
+
+Command:
+
+```powershell
+cd backend
+python -m pytest tests/test_flow_riv.py -vv
+```
+
+Shared model definition:
+
+- Grid: 1 layer, 1 row, 5 columns.
+- `delr = 100 m`, `delc = 100 m`.
+- `top = 10 m`, `bottom = 0 m`.
+- `Kx = Ky = Kz = 1 m/day`.
+- `icelltype = 0`.
+- Left CHD = 10 m at `L0:R0:C0`.
+- Right CHD = 9 m at `L0:R0:C4`.
+- RIV = `L0:R0:C2`.
+- Initial head = 9.5 m.
+
+Branch `riv-head-above-bottom`:
+
+| Parameter | Value |
+|---|---:|
+| stage | 9.6 m |
+| conductance | 5.0 m2/day |
+| river_bottom | 8.0 m |
+| expected equation | `Qriv = conductance * (stage - head)` |
+
+Branch `riv-bottom-limited`:
+
+| Parameter | Value |
+|---|---:|
+| stage | 9.6 m |
+| conductance | 5.0 m2/day |
+| river_bottom | 9.55 m |
+| expected equation | `Qriv = conductance * (stage - river_bottom)` |
+
+Expected heads and exchange rates are calculated by the independent finite-volume reference implementation in `backend/riv_benchmark.py`. They are not derived from MF6 output. The integration tests assert:
+
+- `ModflowGwfriv` is created.
+- `gwf.riv` exists when RIV is present.
+- `.hds` contains finite heads with expected shape.
+- RIV package budget is available from `.bud`.
+- Total inflow/outflow and percent discrepancy pass the documented tolerances.
+- Both RIV formula branches are covered.
+
+Tolerances:
+
+```text
+head_abs_tol = 1e-8 m
+head_rel_tol = 1e-9
+budget_abs_tol = 1e-7 m3/day
+percent_discrepancy_tol = 1e-5
+```
+
+Run artifacts are retained by `RunService` under:
+
+```text
+backend/projects/<project_id>/runs/<run_id>/
+```
+
+Important files for RIV review:
+
+- `run_manifest.json`
+- `input/gwf.riv`
+- `input/gwf.chd`
+- `input/gwf.npf`
+- `input/gwf.lst`
+- `input/gwf.hds`
+- `input/gwf.bud`
+- `logs/mf6_stdout.txt`
+- `logs/mf6_stderr.txt`
+
 ## Persistent Run Manifest Benchmark
 
 Updated: 2026-07-13

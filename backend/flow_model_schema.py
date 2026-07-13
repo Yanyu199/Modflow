@@ -14,6 +14,7 @@ SCHEMA_NAME = "flow_model"
 SCHEMA_VERSION = "1.0"
 FLOW_MODEL_ID_PREFIX = "flow"
 FLOW_MODEL_ID_PATTERN = re.compile(r"^flow_[0-9a-f]{16,32}$")
+BOUNDARY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 STATUS_DRAFT = "draft"
 STATUS_READY = "ready"
@@ -46,7 +47,9 @@ ALLOWED_INITIAL_FIELDS = {"mode", "default", "values", "overrides"}
 ALLOWED_HYDRAULIC_FIELDS = {"icelltype", "kx", "ky", "kz"}
 ALLOWED_K_FIELDS = {"default", "overrides"}
 ALLOWED_ICELLTYPE_FIELDS = {"mode", "values"}
-ALLOWED_BOUNDARIES_FIELDS = {"chd", "wel"}
+ALLOWED_BOUNDARIES_FIELDS = {"chd", "wel", "riv"}
+ALLOWED_RIV_BOUNDARY_FIELDS = {"boundary_id", "name", "description", "cells"}
+ALLOWED_RIV_CELL_FIELDS = {"cell_id", "stage", "conductance", "river_bottom"}
 ALLOWED_SOLVER_FIELDS = {
     "complexity",
     "outer_maximum",
@@ -199,7 +202,7 @@ def build_base_document(
     document.setdefault("simulation", default_simulation())
     document.setdefault("solver", default_solver())
     document.setdefault("output_control", default_output_control())
-    document.setdefault("boundaries", {"chd": [], "wel": []})
+    document.setdefault("boundaries", {"chd": [], "wel": [], "riv": []})
     document.setdefault("diagnostics", empty_diagnostics())
     document.setdefault("provenance", {})
     document["provenance"].setdefault("created_by", "flow_model_v1")
@@ -267,16 +270,16 @@ def int_value(value: Any, diagnostics: Dict[str, Any], path: str, code: str) -> 
     return number
 
 
-def normalize_cell_ref(item: Any, diagnostics: Dict[str, Any], path: str) -> Optional[str]:
+def normalize_cell_ref(item: Any, diagnostics: Dict[str, Any], path: str, *, code: str = "FLOW_CELL_REF_INVALID") -> Optional[str]:
     if isinstance(item, str):
         cell_id = item
     elif isinstance(item, dict):
         cell_id = item.get("cell_id")
     else:
-        add_diagnostic(diagnostics, "error", "FLOW_CELL_REF_INVALID", "Cell reference must be an object or cell_id.", path)
+        add_diagnostic(diagnostics, "error", code, "Cell reference must be an object or cell_id.", path)
         return None
     if not isinstance(cell_id, str) or not cell_id.strip():
-        add_diagnostic(diagnostics, "error", "FLOW_CELL_ID_REQUIRED", "cell_id is required.", f"{path}.cell_id")
+        add_diagnostic(diagnostics, "error", code, "cell_id is required.", f"{path}.cell_id")
         return None
     return cell_id.strip()
 
@@ -421,6 +424,7 @@ def validate_static_structure(document: Dict[str, Any]) -> Dict[str, Any]:
         reject_unknown_fields(boundaries, ALLOWED_BOUNDARIES_FIELDS, diagnostics, "boundaries", "FLOW_UNKNOWN_FIELD")
         chd = boundaries.get("chd", [])
         wel = boundaries.get("wel", [])
+        riv = boundaries.get("riv", [])
         if not isinstance(chd, list):
             add_diagnostic(diagnostics, "error", "FLOW_CHD_INVALID", "boundaries.chd must be a list.", "boundaries.chd")
         else:
@@ -447,6 +451,63 @@ def validate_static_structure(document: Dict[str, Any]) -> Dict[str, Any]:
                     continue
                 normalize_cell_ref(well, diagnostics, f"boundaries.wel[{well_idx}]")
                 finite_float(well.get("rate"), diagnostics, f"boundaries.wel[{well_idx}].rate", "FLOW_WEL_RATE_INVALID")
+        if not isinstance(riv, list):
+            add_diagnostic(diagnostics, "error", "FLOW_RIV_INVALID", "boundaries.riv must be a list.", "boundaries.riv")
+        else:
+            boundary_ids = set()
+            for boundary_idx, boundary in enumerate(riv):
+                path = f"boundaries.riv[{boundary_idx}]"
+                if not isinstance(boundary, dict):
+                    add_diagnostic(diagnostics, "error", "FLOW_RIV_INVALID", "RIV boundary must be an object.", path)
+                    continue
+                reject_unknown_fields(boundary, ALLOWED_RIV_BOUNDARY_FIELDS, diagnostics, path, "FLOW_UNKNOWN_FIELD")
+                boundary_id = boundary.get("boundary_id")
+                if not isinstance(boundary_id, str) or not BOUNDARY_ID_PATTERN.fullmatch(boundary_id):
+                    add_diagnostic(
+                        diagnostics,
+                        "error",
+                        "FLOW_RIV_ID_INVALID",
+                        "RIV boundary_id must be 1-64 characters using letters, numbers, underscore, or hyphen.",
+                        f"{path}.boundary_id",
+                    )
+                elif boundary_id in boundary_ids:
+                    add_diagnostic(
+                        diagnostics,
+                        "error",
+                        "FLOW_RIV_ID_DUPLICATE",
+                        "RIV boundary_id must be unique.",
+                        f"{path}.boundary_id",
+                    )
+                else:
+                    boundary_ids.add(boundary_id)
+                cells = boundary.get("cells")
+                if not isinstance(cells, list) or not cells:
+                    add_diagnostic(diagnostics, "error", "FLOW_RIV_CELLS_REQUIRED", "RIV boundary must contain at least one cell.", f"{path}.cells")
+                    continue
+                for cell_idx, cell in enumerate(cells):
+                    cell_path = f"{path}.cells[{cell_idx}]"
+                    if not isinstance(cell, dict):
+                        add_diagnostic(diagnostics, "error", "FLOW_RIV_CELL_INVALID", "RIV cell must be an object.", cell_path)
+                        continue
+                    reject_unknown_fields(cell, ALLOWED_RIV_CELL_FIELDS, diagnostics, cell_path, "FLOW_UNKNOWN_FIELD")
+                    normalize_cell_ref(cell, diagnostics, cell_path, code="FLOW_RIV_CELL_INVALID")
+                    stage = finite_float(cell.get("stage"), diagnostics, f"{cell_path}.stage", "FLOW_RIV_STAGE_NONFINITE")
+                    river_bottom = finite_float(cell.get("river_bottom"), diagnostics, f"{cell_path}.river_bottom", "FLOW_RIV_BOTTOM_NONFINITE")
+                    finite_float(
+                        cell.get("conductance"),
+                        diagnostics,
+                        f"{cell_path}.conductance",
+                        "FLOW_RIV_CONDUCTANCE_INVALID",
+                        positive=True,
+                    )
+                    if stage is not None and river_bottom is not None and stage <= river_bottom:
+                        add_diagnostic(
+                            diagnostics,
+                            "error",
+                            "FLOW_RIV_STAGE_NOT_ABOVE_BOTTOM",
+                            "RIV stage must be greater than river_bottom.",
+                            f"{cell_path}.stage",
+                        )
 
     solver = require_object(document.get("solver"), diagnostics, "solver", "FLOW_SOLVER_INVALID")
     if solver is not None:
@@ -477,4 +538,8 @@ def normalize_ids(document: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(well, dict):
             well.setdefault("well_id", f"wel_{idx + 1:03d}")
             well.setdefault("name", well["well_id"])
+    for idx, boundary in enumerate(normalized.get("boundaries", {}).get("riv", []) or []):
+        if isinstance(boundary, dict):
+            boundary.setdefault("boundary_id", f"riv_{idx + 1:03d}")
+            boundary.setdefault("name", boundary["boundary_id"])
     return normalized

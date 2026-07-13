@@ -59,6 +59,7 @@ def test_run_api_creates_persistent_manifest_and_budget_report(tmp_path, monkeyp
     package_budget = {item["name"]: item for item in manifest["package_budget"]["packages"]}
     assert package_budget["CHD"]["available"] is True
     assert package_budget["WEL"]["available"] is True
+    assert "RIV" not in package_budget
     assert package_budget["WEL"]["out"] == pytest.approx(1.0, abs=1.0e-7)
     for key in ("simulation_listing", "model_listing", "head", "budget"):
         assert manifest["outputs"][key]["exists"] is True

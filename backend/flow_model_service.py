@@ -190,13 +190,14 @@ class FlowModelService:
         normalized.setdefault("simulation", default_simulation())
         normalized.setdefault("solver", default_solver())
         normalized.setdefault("output_control", default_output_control())
-        normalized.setdefault("boundaries", {"chd": [], "wel": []})
+        normalized.setdefault("boundaries", {"chd": [], "wel": [], "riv": []})
         normalized["simulation"] = {**default_simulation(), **(normalized.get("simulation") or {})}
         normalized["solver"] = {**default_solver(), **(normalized.get("solver") or {})}
         normalized["output_control"] = {**default_output_control(), **(normalized.get("output_control") or {})}
         normalized["boundaries"] = {
             "chd": list((normalized.get("boundaries") or {}).get("chd") or []),
             "wel": list((normalized.get("boundaries") or {}).get("wel") or []),
+            "riv": list((normalized.get("boundaries") or {}).get("riv") or []),
         }
         normalized = normalize_ids(normalized)
         return normalized
@@ -257,7 +258,9 @@ class FlowModelService:
         icelltype = self._materialize_icelltype(document, shape, diagnostics)
         chd_spd = self._materialize_chd(document, arrays, shape, idomain, diagnostics)
         wel_spd = self._materialize_wel(document, arrays, shape, idomain, diagnostics)
+        riv_spd = self._materialize_riv(document, arrays, shape, idomain, diagnostics)
         chd_cells = {tuple(cellid) for cellid, _head in chd_spd}
+        riv_cells = {tuple(item["cellid"]) for item in riv_spd}
         for cellid, rate in wel_spd:
             if tuple(cellid) in chd_cells:
                 add_diagnostic(
@@ -268,9 +271,37 @@ class FlowModelService:
                     "boundaries.wel",
                     {"cell": list(cellid), "rate": rate},
                 )
+            if tuple(cellid) in riv_cells:
+                add_diagnostic(
+                    diagnostics,
+                    "warning",
+                    "FLOW_RIV_WEL_SHARED_CELL",
+                    "A WEL cell also has a RIV boundary; verify the combined source/sink behavior.",
+                    "boundaries.riv",
+                    {"cell": list(cellid), "rate": rate},
+                )
+        for item in riv_spd:
+            cellid = tuple(item["cellid"])
+            if cellid in chd_cells:
+                add_diagnostic(
+                    diagnostics,
+                    "error",
+                    "FLOW_RIV_CHD_CONFLICT",
+                    "A RIV cell cannot also be a CHD cell in flow_model_v1.",
+                    "boundaries.riv",
+                    {"cell": list(cellid), "boundary_id": item["boundary_id"]},
+                )
+
+        package_names = ["TDIS", "IMS", "GWF", "DIS", "IC", "NPF", "CHD"]
+        if wel_spd:
+            package_names.append("WEL")
+        if riv_spd:
+            package_names.append("RIV")
+        package_names.append("OC")
 
         materialized.update(
             {
+                "package_names": package_names,
                 "shape": shape,
                 "strt": strt,
                 "kx": kx,
@@ -279,9 +310,12 @@ class FlowModelService:
                 "icelltype": icelltype,
                 "chd_spd": chd_spd,
                 "wel_spd": wel_spd,
+                "riv_spd": riv_spd,
                 "counts": {
                     "chd_cells": len(chd_spd),
                     "wel_cells": len(wel_spd),
+                    "riv_cells": len(riv_spd),
+                    "riv_boundaries": len((document.get("boundaries") or {}).get("riv") or []),
                     "k_overrides": self._count_k_overrides(document),
                     "initial_overrides": len((document.get("initial_conditions") or {}).get("overrides") or []),
                 },
@@ -524,6 +558,88 @@ class FlowModelService:
             )
         return wel_spd
 
+    def _materialize_riv(self, document, arrays, shape, idomain, diagnostics):
+        riv_spd = []
+        seen_cells = {}
+        for boundary_idx, boundary in enumerate((document.get("boundaries") or {}).get("riv") or []):
+            if not isinstance(boundary, dict):
+                continue
+            boundary_id = boundary.get("boundary_id") or f"riv_{boundary_idx + 1:03d}"
+            for cell_idx, cell_spec in enumerate(boundary.get("cells") or []):
+                if not isinstance(cell_spec, dict):
+                    continue
+                path = f"boundaries.riv[{boundary_idx}].cells[{cell_idx}]"
+                cell = self._parse_cell(
+                    cell_spec.get("cell_id"),
+                    document["grid_model_id"],
+                    shape,
+                    diagnostics,
+                    f"{path}.cell_id",
+                    code="FLOW_RIV_CELL_INVALID",
+                )
+                if cell is None:
+                    continue
+                if idomain[cell] <= 0:
+                    add_diagnostic(diagnostics, "error", "FLOW_RIV_CELL_INACTIVE", "RIV cell must be active.", f"{path}.cell_id")
+                    continue
+                if cell in seen_cells:
+                    add_diagnostic(
+                        diagnostics,
+                        "error",
+                        "FLOW_RIV_CELL_DUPLICATE",
+                        "Only one RIV record is allowed in a cell in flow_model_v1.",
+                        f"{path}.cell_id",
+                        {"first_boundary_id": seen_cells[cell], "duplicate_boundary_id": boundary_id},
+                    )
+                    continue
+                stage = cell_spec.get("stage")
+                conductance = cell_spec.get("conductance")
+                river_bottom = cell_spec.get("river_bottom")
+                if not self._is_finite_number(stage):
+                    add_diagnostic(diagnostics, "error", "FLOW_RIV_STAGE_NONFINITE", "RIV stage must be finite.", f"{path}.stage")
+                    continue
+                if not self._is_finite_number(river_bottom):
+                    add_diagnostic(diagnostics, "error", "FLOW_RIV_BOTTOM_NONFINITE", "RIV river_bottom must be finite.", f"{path}.river_bottom")
+                    continue
+                if not self._is_finite_number(conductance) or float(conductance) <= 0:
+                    add_diagnostic(diagnostics, "error", "FLOW_RIV_CONDUCTANCE_INVALID", "RIV conductance must be positive finite.", f"{path}.conductance")
+                    continue
+                stage = float(stage)
+                conductance = float(conductance)
+                river_bottom = float(river_bottom)
+                if stage <= river_bottom:
+                    add_diagnostic(
+                        diagnostics,
+                        "error",
+                        "FLOW_RIV_STAGE_NOT_ABOVE_BOTTOM",
+                        "RIV stage must be greater than river_bottom.",
+                        f"{path}.stage",
+                    )
+                    continue
+                self._warn_elevation_bounds(stage, cell, arrays, diagnostics, f"{path}.stage", "FLOW_RIV_STAGE")
+                self._warn_elevation_bounds(river_bottom, cell, arrays, diagnostics, f"{path}.river_bottom", "FLOW_RIV_BOTTOM")
+                if conductance > 1.0e12 or conductance < 1.0e-12:
+                    add_diagnostic(
+                        diagnostics,
+                        "warning",
+                        "FLOW_RIV_EXTREME_CONDUCTANCE",
+                        "RIV conductance is extremely large or small; verify units are m2/day.",
+                        f"{path}.conductance",
+                        {"conductance": conductance},
+                    )
+                seen_cells[cell] = boundary_id
+                riv_spd.append(
+                    {
+                        "cellid": cell,
+                        "stage": stage,
+                        "conductance": conductance,
+                        "river_bottom": river_bottom,
+                        "boundary_id": boundary_id,
+                        "boundname": self._boundname(boundary_id, cell_idx),
+                    }
+                )
+        return riv_spd
+
     def _warn_head_bounds(self, head, cell, arrays, diagnostics, path, code):
         layer, row, column = cell
         top = np.asarray(arrays["top"], dtype=float)
@@ -540,12 +656,41 @@ class FlowModelService:
                 {"cell_top": float(cell_top), "cell_bottom": float(cell_bottom), "head": float(head)},
             )
 
-    def _parse_cell(self, cell_id, grid_model_id, shape, diagnostics, path):
+    def _warn_elevation_bounds(self, elevation, cell, arrays, diagnostics, path, code_prefix):
+        layer, row, column = cell
+        top = np.asarray(arrays["top"], dtype=float)
+        botm = np.asarray(arrays["botm"], dtype=float)
+        cell_top = top[row, column] if layer == 0 else botm[layer - 1, row, column]
+        cell_bottom = botm[layer, row, column]
+        if elevation > cell_top:
+            add_diagnostic(
+                diagnostics,
+                "warning",
+                f"{code_prefix}_ABOVE_CELL_TOP",
+                "RIV elevation is above the selected cell top elevation.",
+                path,
+                {"cell_top": float(cell_top), "cell_bottom": float(cell_bottom), "elevation": float(elevation)},
+            )
+        if elevation < cell_bottom:
+            add_diagnostic(
+                diagnostics,
+                "warning",
+                f"{code_prefix}_BELOW_CELL_BOTTOM",
+                "RIV elevation is below the selected cell bottom elevation.",
+                path,
+                {"cell_top": float(cell_top), "cell_bottom": float(cell_bottom), "elevation": float(elevation)},
+            )
+
+    def _boundname(self, boundary_id, cell_idx):
+        safe = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in str(boundary_id))
+        return f"{safe}_{cell_idx + 1}"
+
+    def _parse_cell(self, cell_id, grid_model_id, shape, diagnostics, path, code="FLOW_CELL_ID_INVALID"):
         try:
             parsed = parse_cell_id(cell_id, expected_grid_model_id=grid_model_id, shape=shape)
             return (parsed["layer"], parsed["row"], parsed["column"])
         except Exception as exc:
-            add_diagnostic(diagnostics, "error", "FLOW_CELL_ID_INVALID", str(exc), path)
+            add_diagnostic(diagnostics, "error", code, str(exc), path)
             return None
 
     def _count_k_overrides(self, document):
@@ -554,6 +699,26 @@ class FlowModelService:
 
     def _package_summary(self, flow_model, materialized):
         counts = materialized.get("counts") or {}
+        diagnostics = flow_model.get("diagnostics") or {}
+        riv_records = materialized.get("riv_spd") or []
+        riv_layers = {}
+        for item in riv_records:
+            layer = str(item["cellid"][0])
+            riv_layers[layer] = riv_layers.get(layer, 0) + 1
+        riv_summary = {
+            "boundary_count": counts.get("riv_boundaries", 0),
+            "cell_count": counts.get("riv_cells", 0),
+            "layers": riv_layers,
+            "stage_min": min((item["stage"] for item in riv_records), default=None),
+            "stage_max": max((item["stage"] for item in riv_records), default=None),
+            "river_bottom_min": min((item["river_bottom"] for item in riv_records), default=None),
+            "river_bottom_max": max((item["river_bottom"] for item in riv_records), default=None),
+            "conductance_min": min((item["conductance"] for item in riv_records), default=None),
+            "conductance_max": max((item["conductance"] for item in riv_records), default=None),
+            "conductance_unit": "m2/day",
+            "error_count": len(diagnostics.get("errors") or []),
+            "warning_count": len(diagnostics.get("warnings") or []),
+        }
         return {
             "packages": list(materialized.get("package_names") or []),
             "stress_periods": 1,
@@ -566,6 +731,7 @@ class FlowModelService:
             },
             "chd_cell_count": counts.get("chd_cells", 0),
             "wel_cell_count": counts.get("wel_cells", 0),
+            "riv": riv_summary,
             "output_files": {
                 "head": (flow_model.get("output_control") or {}).get("head_file", "gwf.hds"),
                 "budget": (flow_model.get("output_control") or {}).get("budget_file", "gwf.bud"),
@@ -638,7 +804,19 @@ class FlowModelService:
         chd_data = [(cellid, head) for cellid, head in materialized["chd_spd"]]
         flopy.mf6.ModflowGwfchd(gwf, stress_period_data={0: chd_data}, save_flows=True)
         wel_data = [(cellid, rate) for cellid, rate in materialized["wel_spd"]]
-        flopy.mf6.ModflowGwfwel(gwf, stress_period_data={0: wel_data}, save_flows=True)
+        if wel_data:
+            flopy.mf6.ModflowGwfwel(gwf, stress_period_data={0: wel_data}, save_flows=True)
+        riv_data = [
+            (item["cellid"], item["stage"], item["conductance"], item["river_bottom"], item["boundname"])
+            for item in materialized.get("riv_spd") or []
+        ]
+        if riv_data:
+            flopy.mf6.ModflowGwfriv(
+                gwf,
+                stress_period_data={0: riv_data},
+                save_flows=True,
+                boundnames=True,
+            )
         oc = flow_model.get("output_control") or {}
         flopy.mf6.ModflowGwfoc(
             gwf,
