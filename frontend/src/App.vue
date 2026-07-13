@@ -44,6 +44,8 @@
           ref="viewer3d" 
           :points="resultPoints" 
           :layerMapping="layerMapping"
+          :projectId="projectId"
+          :gridModelId="activeGridModelId"
           @trace-particle="onParticleTraceRequested"
         />
       </div>
@@ -64,6 +66,7 @@
             :wells="wells" 
             :kCells="kCells"
             :faults="faults"
+            :gridCells="gridRenderCells"
             :projectId="projectId"
             :projectCrs="currentProject ? currentProject.crs : null"
           />
@@ -93,6 +96,15 @@
               :description="geologySummary"
               show-icon
               :closable="false"
+            ></el-alert>
+            <el-alert
+              v-if="currentGridModel"
+              :title="`当前网格：${currentGridModel.status}`"
+              :description="gridSummaryText"
+              :type="hasBlockingGridErrors ? 'error' : (currentGridModel.status === 'stale' ? 'warning' : 'info')"
+              show-icon
+              :closable="false"
+              class="mt-10"
             ></el-alert>
             <el-alert
               v-else
@@ -134,6 +146,7 @@
             :wells="wells"
             :kCells="kCells"
             :faults="faults"
+            :gridCells="gridRenderCells"
             :projectId="projectId"
             :projectCrs="currentProject ? currentProject.crs : null"
           />
@@ -184,6 +197,24 @@
             @input="gridConfig = $event"
             @preview="onPreviewGrid"
           />
+
+          <div v-if="currentGridModel" class="model-summary">
+            <div class="summary-title">当前 Grid Model</div>
+            <div class="summary-row"><span>状态</span><b>{{ currentGridModel.status }}</b></div>
+            <div class="summary-row"><span>网格 ID</span><b>{{ activeGridModelId || '-' }}</b></div>
+            <div class="summary-row"><span>维度</span><b>{{ gridSummaryText }}</b></div>
+            <div class="summary-row"><span>质量错误</span><b>{{ gridQuality.errors ? gridQuality.errors.length : 0 }}</b></div>
+            <div class="summary-row"><span>质量警告</span><b>{{ gridQuality.warnings ? gridQuality.warnings.length : 0 }}</b></div>
+          </div>
+
+          <el-alert
+            v-if="hasBlockingGridErrors"
+            title="网格质量存在阻塞错误，不能进入正式运行"
+            type="error"
+            show-icon
+            :closable="false"
+            class="mt-10"
+          ></el-alert>
 
           <div class="model-summary">
             <div class="summary-title">当前地质体摘要</div>
@@ -297,6 +328,10 @@ export default {
     return {
       currentProject: null,
       currentGeologyModel: null,
+      currentGridModel: null,
+      gridQuality: {},
+      gridRenderCells: [],
+      activeGridModelId: null,
       projectDialogVisible: true,
       projectSubmitting: false,
       pendingLegacyProjectState: null,
@@ -306,7 +341,17 @@ export default {
       resultPoints: [], 
       layerMapping: {},
       loading: false,
-      gridConfig: { x_mode: 'size', x_val: 1000, y_mode: 'size', y_val: 1000, n_layers: 1, z_thick: 10 },
+      gridConfig: {
+        x_mode: 'size',
+        x_val: 1000,
+        y_mode: 'size',
+        y_val: 1000,
+        n_layers: 1,
+        z_thick: 10,
+        rotation: 0,
+        minimum_thickness: 0.1,
+        minimum_boundary_overlap: 0.1
+      },
       currentSegmentIdx: null, 
       boundaryConfigs: {}, 
       wells: [], 
@@ -329,6 +374,7 @@ export default {
       return Boolean(
         this.boundary
         || this.currentGeologyModel
+        || this.currentGridModel
         || this.rawCsvContent
         || this.faults.length > 0
         || this.wells.length > 0
@@ -358,6 +404,23 @@ export default {
       const boundaryCount = this.boundary ? this.boundary.length : 0;
       const boreholeCount = this.boreholesData ? this.boreholesData.length : 0;
       return `边界点 ${boundaryCount}，钻孔 ${boreholeCount}，地层 ${this.gridConfig.n_layers || 1} 层，断层 ${this.faults.length} 条`;
+    },
+    hasBlockingGridErrors() {
+      return Boolean(
+        this.currentGridModel
+        && (
+          this.currentGridModel.status === 'invalid'
+          || this.currentGridModel.status === 'stale'
+          || (this.gridQuality.errors && this.gridQuality.errors.length > 0)
+        )
+      );
+    },
+    gridSummaryText() {
+      if (!this.currentGridModel || !this.currentGridModel.geometry) return '未生成网格';
+      const geometry = this.currentGridModel.geometry;
+      const active = this.gridQuality.summary ? this.gridQuality.summary.active_cell_count : null;
+      const base = `${geometry.nlay} 层 x ${geometry.nrow} 行 x ${geometry.ncol} 列`;
+      return active === null || active === undefined ? base : `${base}，活动单元 ${active}`;
     }
   },
   watch: {
@@ -470,6 +533,7 @@ export default {
     applyNormalizedGeologyModel(model) {
       if (!model) return;
       this.currentGeologyModel = model;
+      this.clearGridModelState();
       const formations = (model.stratigraphy && model.stratigraphy.formations) || [];
       this.layerMapping = {};
       formations.forEach((formation, index) => {
@@ -482,6 +546,67 @@ export default {
       this.faults = this.faultLinesFromModel(model);
       this.boreholesData = this.boreholesFromModel(model);
       this.showGeologyDiagnostics(model.diagnostics);
+    },
+    clearGridModelState(clearPoints = true) {
+      this.currentGridModel = null;
+      this.gridQuality = {};
+      this.gridRenderCells = [];
+      this.activeGridModelId = null;
+      if (clearPoints) this.resultPoints = [];
+    },
+    buildGridApiConfig() {
+      const cfg = this.gridConfig || {};
+      const sizeFromAxis = (axis) => {
+        const mode = cfg[`${axis}_mode`];
+        const value = Number(cfg[`${axis}_val`] || 1);
+        if (mode !== 'count') return Math.max(value, 1);
+        if (!this.boundary || this.boundary.length === 0) return Math.max(value, 1);
+        const coords = this.boundary.map(point => Number(point[axis]));
+        const span = Math.max(...coords) - Math.min(...coords);
+        return Math.max(span / Math.max(value, 1), 1);
+      };
+      return {
+        grid_type: 'structured_dis',
+        cell_size: {
+          x: sizeFromAxis('x'),
+          y: sizeFromAxis('y')
+        },
+        rotation: Number(cfg.rotation || 0),
+        minimum_thickness: Number(cfg.minimum_thickness || 0.1),
+        pinchout_policy: cfg.pinchout_policy || 'deactivate',
+        boundary_activation_rule: 'cell_intersection',
+        minimum_boundary_overlap: Number(
+          cfg.minimum_boundary_overlap === undefined ? 0.1 : cfg.minimum_boundary_overlap
+        )
+      };
+    },
+    applyGridModel(model) {
+      if (!model) return;
+      this.currentGridModel = model;
+      this.activeGridModelId = model.grid_model_id;
+      this.gridQuality = model.quality || {};
+      if (this.currentProject) {
+        const references = { ...(this.currentProject.references || {}), grid_model_id: model.grid_model_id };
+        this.currentProject = { ...this.currentProject, references };
+      }
+    },
+    async loadGridRenderData(gridModelId) {
+      const response = await axios.get(
+        `http://localhost:5000/projects/${this.projectId}/grids/${gridModelId}/render-data`
+      );
+      if (response.data.success) {
+        this.gridRenderCells = response.data.points || [];
+        this.resultPoints = response.data.points || [];
+        this.gridQuality = response.data.quality || this.gridQuality || {};
+        if (this.currentGridModel) {
+          this.currentGridModel = {
+            ...this.currentGridModel,
+            status: response.data.status || this.currentGridModel.status,
+            quality: this.gridQuality
+          };
+        }
+      }
+      return response.data;
     },
     async persistGeologyModelToBackend(model) {
       if (!this.ensureProjectContext('导入地质体模型')) return null;
@@ -511,6 +636,7 @@ export default {
       if (state.rawCsvContent) this.rawCsvContent = state.rawCsvContent;
       if (state.boreholesData) this.boreholesData = state.boreholesData;
       if (state.geology_model) this.applyNormalizedGeologyModel(state.geology_model);
+      else this.clearGridModelState();
 
       this.resultPoints = [];
       this.currentLogs = '';
@@ -540,6 +666,7 @@ export default {
       this.rawCsvContent = data.rawCsv;
       this.boreholesData = data.boreholes;
       if (data.geology_model) this.applyNormalizedGeologyModel(data.geology_model);
+      else this.clearGridModelState();
       this.$message.success(`钻孔解析成功！请点击“预览钻孔”查看。`);
     },
 
@@ -600,7 +727,6 @@ export default {
         if (this.$refs.mapRef && this.boundary) {
           this.$refs.mapRef.boundary = this.boundary;
           this.$refs.mapRef.drawMap();
-          this.$refs.mapRef.previewGrid(this.getMapGridSize());
         }
         if (this.boreholesData && this.$refs.viewer3d) {
           this.$refs.viewer3d.drawBoreholes(this.boreholesData);
@@ -622,7 +748,8 @@ export default {
           wells: this.wells,
           kCells: this.kCells,
           rchData: this.rchData,
-          evtData: this.evtData
+          evtData: this.evtData,
+          activeGridModelId: this.activeGridModelId
         }
       };
       
@@ -755,6 +882,7 @@ export default {
         const payload = Array.isArray(data) ? { coords: data } : (data || {});
         this.boundary = payload.coords || [];
         if (payload.geology_model) this.applyNormalizedGeologyModel(payload.geology_model);
+        else this.clearGridModelState();
         this.wells = []; this.kCells = []; this.resultPoints = [];
         this.$message.success("边界加载成功");
     },
@@ -764,6 +892,7 @@ export default {
         const payload = Array.isArray(data) ? { faults: data } : (data || {});
         this.faults = payload.faults || [];
         if (payload.geology_model) this.applyNormalizedGeologyModel(payload.geology_model);
+        else this.clearGridModelState();
         this.$message.success(`成功载入 ${this.faults.length} 条断层线`);
         // 如果已经上传过钻孔并生成了网格，自动刷新3D网格预览
         if (this.hasGeologyModel) {
@@ -771,51 +900,57 @@ export default {
         }
     },
     
-    onPreviewGrid(payload) { 
+    async onPreviewGrid(payload) {
       if (!this.ensureProjectContext('预览网格')) return;
-      this.gridConfig = { ...this.gridConfig, ...payload.config };
-      if(this.$refs.mapRef)
-      this.$refs.mapRef.previewGrid(this.getMapGridSize()); 
-      this.fetchGridPreview();
+      this.gridConfig = { ...this.gridConfig, ...((payload && payload.config) || {}) };
+      if (this.activeGridModelId && (this.wells.length > 0 || this.kCells.length > 0)) {
+        try {
+          await this.$confirm(
+            '重新生成 Grid Model 会产生新的 cell_id，当前井和变 K 单元选择将被清空。是否继续？',
+            '重新生成网格',
+            { type: 'warning' }
+          );
+        } catch (e) {
+          return;
+        }
+        this.wells = [];
+        this.kCells = [];
+      }
+      await this.fetchGridPreview();
     },
 
     async fetchGridPreview() {
       if (!this.ensureProjectContext('预览网格')) return;
+      if (!this.hasGeologyModel) {
+        this.$message.warning('请先完成并保存有效的地质体模型');
+        return;
+      }
       try {
-        const res = await axios.post('http://localhost:5000/preview-geometry', {
-          project_id: this.projectId,
-          boundary: this.boundary,
-          params: this.gridConfig,
-          faults: this.faults // 携带断层数据传给后端进行切分插值
-        });
+        const res = await axios.post(
+          `http://localhost:5000/projects/${this.projectId}/grids`,
+          this.buildGridApiConfig()
+        );
         if (res.data.success) {
-          this.resultPoints = res.data.points;
-          
-          if (res.data.layer_mapping) {
-            this.layerMapping = res.data.layer_mapping; 
-          }
-          
-          if (res.data.boundary_auto && (!this.boundary || this.boundary.length === 0)) {
-            this.boundary = res.data.boundary_auto;
-            if(this.$refs.mapRef) {
-              this.$refs.mapRef.boundary = this.boundary;
-              this.$refs.mapRef.drawMap();
-            }
-          }
+          this.applyGridModel(res.data.grid_model);
+          await this.loadGridRenderData(res.data.grid_model_id);
           
           this.$nextTick(() => {
-            if (res.data.boreholes && this.$refs.viewer3d && this.$refs.viewer3d.drawBoreholes) {
-              this.$refs.viewer3d.drawBoreholes(res.data.boreholes);
+            if (this.boreholesData && this.$refs.viewer3d && this.$refs.viewer3d.drawBoreholes) {
+              this.$refs.viewer3d.drawBoreholes(this.boreholesData);
             }
           });
 
-          this.$message.success('3D 地质网格模型已刷新（包含断层特征）');
+          if (this.hasBlockingGridErrors) {
+            this.$message.warning('Grid Model 已生成，但存在阻塞质量问题，请查看质量报告');
+          } else {
+            this.$message.success('Grid Model 已由后端生成并刷新');
+          }
         } else {
           this.$message.warning(res.data.error || '获取网格失败');
         }
       } catch (e) {
         console.error(e);
-        this.$message.error(e.response?.data?.error || '请求出错，请检查是否已上传钻孔数据');
+        this.$message.error(e.response?.data?.error || '请求出错，请检查地质体模型和网格配置');
       }
     },
 
@@ -823,12 +958,25 @@ export default {
       this.fetchGridPreview();
     },
 
+    isSameGridCell(a, b) {
+      if (!a || !b) return false;
+      if (a.cell_id && b.cell_id) return a.cell_id === b.cell_id;
+      return a.row === b.row && a.col === b.col && (a.layer || 0) === (b.layer || 0);
+    },
+
     onGridClicked(data) {
       if (this.activePage !== 'flow') return;
-      const existingWell = this.wells.find(w => w.row === data.row && w.col === data.col);
-      const existingK = this.kCells.find(k => k.row === data.row && k.col === data.col);
+      if (!data || !data.cell_id) {
+        this.$message.warning('请先使用后端 Grid Model 生成网格，再选择单元');
+        return;
+      }
+      const probe = { ...data, layer: data.layer || 0 };
+      const existingWell = this.wells.find(w => this.isSameGridCell(w, probe));
+      const existingK = this.kCells.find(k => this.isSameGridCell(k, probe));
       this.tempCell = {
-        row: data.row, col: data.col, x: data.x, y: data.y,
+        cell_id: data.cell_id,
+        grid_model_id: data.grid_model_id || this.activeGridModelId,
+        row: data.row, col: data.col, column: data.column !== undefined ? data.column : data.col, x: data.x, y: data.y,
         layer: existingWell ? (existingWell.layer || 0) : (existingK ? (existingK.layer || 0) : 0),
         type: existingK ? 'k_cell' : 'well', 
         rate: existingWell ? existingWell.rate : -1000,
@@ -838,17 +986,19 @@ export default {
       this.activeStep = '4';
     },
     resetGridCell() {
-      const { row, col } = this.tempCell;
-      this.wells = this.wells.filter(w => !(w.row === row && w.col === col));
-      this.kCells = this.kCells.filter(k => !(k.row === row && k.col === col));
+      const target = this.tempCell;
+      this.wells = this.wells.filter(w => !this.isSameGridCell(w, target));
+      this.kCells = this.kCells.filter(k => !this.isSameGridCell(k, target));
       this.dialogVisible = false;
     },
     saveCellProperty() {
-      const { row, col, type, rate, k_val, layer, x, y } = this.tempCell;
-      this.wells = this.wells.filter(w => !(w.row === row && w.col === col && w.layer === layer));
-      this.kCells = this.kCells.filter(k => !(k.row === row && k.col === col && k.layer === layer));
-      if (type === 'well') this.wells.push({ row, col, layer, rate, x, y });
-      else this.kCells.push({ row, col, layer, k_val, x, y });
+      const { cell_id, grid_model_id, row, col, column, type, rate, k_val, layer, x, y } = this.tempCell;
+      const target = { cell_id, row, col, layer };
+      this.wells = this.wells.filter(w => !this.isSameGridCell(w, target));
+      this.kCells = this.kCells.filter(k => !this.isSameGridCell(k, target));
+      const base = { cell_id, grid_model_id, row, col, column: column !== undefined ? column : col, layer, x, y };
+      if (type === 'well') this.wells.push({ ...base, rate });
+      else this.kCells.push({ ...base, k_val });
       this.dialogVisible = false;
     },
 
@@ -860,15 +1010,28 @@ export default {
     onBoundaryConfigSave(cfg) { this.$set(this.boundaryConfigs, cfg.id, cfg); },
     onBoundaryConfigRemove(id) { this.$delete(this.boundaryConfigs, id); },
     
-    handleAttributeDelete({ type, row, col, layer }) {
-      if (type === 'well') this.wells = this.wells.filter(w => !(w.row === row && w.col === col && (layer === undefined || w.layer === layer)));
-      else this.kCells = this.kCells.filter(k => !(k.row === row && k.col === col && (layer === undefined || k.layer === layer)));
+    handleAttributeDelete(target) {
+      if (target.type === 'well') this.wells = this.wells.filter(w => !this.isSameGridCell(w, target));
+      else this.kCells = this.kCells.filter(k => !this.isSameGridCell(k, target));
     },
     handleClearAllAttributes() { this.wells = []; this.kCells = []; },
-    handleAttributeTypeChange({ row, col, newType, layer }) {
-      this.handleAttributeDelete({ type: newType === 'well' ? 'k_cell' : 'well', row, col, layer });
-       if (newType === 'well') this.wells.push({ row, col, layer: layer||0, rate: -1000 });
-       else this.kCells.push({ row, col, layer: layer||0, k_val: 10.0 });
+    handleAttributeTypeChange(rowData) {
+      const { newType } = rowData;
+      const sourceList = newType === 'well' ? this.kCells : this.wells;
+      const source = sourceList.find(item => this.isSameGridCell(item, rowData)) || rowData;
+      this.handleAttributeDelete({ ...rowData, type: newType === 'well' ? 'k_cell' : 'well' });
+      const base = {
+        cell_id: source.cell_id,
+        grid_model_id: source.grid_model_id || this.activeGridModelId,
+        row: source.row,
+        col: source.col,
+        column: source.column !== undefined ? source.column : source.col,
+        layer: source.layer || 0,
+        x: source.x,
+        y: source.y
+      };
+      if (newType === 'well') this.wells.push({ ...base, rate: -1000 });
+      else this.kCells.push({ ...base, k_val: 10.0 });
     },
     handleRchEvtUpdate(data) {
       this.rchData = data.rch;
@@ -881,6 +1044,14 @@ export default {
 
     async handleRun(partialParams, mpCell = null) {
       if (!this.ensureProjectContext('运行模型')) return;
+      if (!this.activeGridModelId) {
+        this.$message.warning('请先生成 Grid Model');
+        return;
+      }
+      if (this.hasBlockingGridErrors) {
+        this.$message.error('当前 Grid Model 存在阻塞错误或已过期，请重新生成后再运行');
+        return;
+      }
       this.loading = true;
       this.currentLogs = '';
       
@@ -900,6 +1071,7 @@ export default {
       try {
         const res = await axios.post('http://localhost:5000/run-model', {
           project_id: this.projectId, 
+          grid_model_id: this.activeGridModelId,
           boundary: this.boundary, 
           params: fullParams, 
           boundary_conditions: boundaryList, 

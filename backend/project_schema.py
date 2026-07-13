@@ -10,7 +10,8 @@ except Exception:  # pragma: no cover - pyproj is normally installed with geopan
 
 
 SCHEMA_NAME = "modflow_project"
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
+SUPPORTED_SCHEMA_VERSIONS = {"1.0", SCHEMA_VERSION}
 
 ALLOWED_TOP_LEVEL_FIELDS = {
     "schema_name",
@@ -29,7 +30,7 @@ ALLOWED_TOP_LEVEL_FIELDS = {
 ALLOWED_CRS_FIELDS = {"authority", "code", "wkt", "axis_order"}
 ALLOWED_UNIT_FIELDS = {"horizontal_length", "vertical_length", "time", "flow"}
 ALLOWED_MODEL_SETTINGS_FIELDS = {"model_type", "flow_regime"}
-ALLOWED_REFERENCE_FIELDS = {"geology_model_id", "flow_model_id"}
+ALLOWED_REFERENCE_FIELDS = {"geology_model_id", "grid_model_id", "flow_model_id"}
 
 SUPPORTED_HORIZONTAL_LENGTH_UNITS = {"m"}
 SUPPORTED_VERTICAL_LENGTH_UNITS = {"m"}
@@ -184,9 +185,26 @@ def validate_references(references):
             raise ProjectValidationError(f"references.{key} must be null or string")
 
 
+def migrate_project_document(project):
+    if not isinstance(project, dict):
+        raise ProjectValidationError("project must be a JSON object")
+    migrated = copy.deepcopy(project)
+    version = migrated.get("schema_version")
+    if version == "1.0":
+        references = copy.deepcopy(migrated.get("references") or {})
+        references.setdefault("geology_model_id", None)
+        references.setdefault("grid_model_id", None)
+        references.setdefault("flow_model_id", None)
+        migrated["references"] = references
+        migrated["schema_version"] = SCHEMA_VERSION
+        return migrated, True
+    return migrated, False
+
+
 def validate_project_document(project):
     if not isinstance(project, dict):
         raise ProjectValidationError("project must be a JSON object")
+    project, _ = migrate_project_document(project)
     assert_json_compatible(project)
     reject_unknown_fields(project, ALLOWED_TOP_LEVEL_FIELDS, "project")
 
@@ -209,8 +227,10 @@ def validate_project_document(project):
 
     if project["schema_name"] != SCHEMA_NAME:
         raise ProjectValidationError(f"schema_name must be {SCHEMA_NAME}")
-    if project["schema_version"] != SCHEMA_VERSION:
+    if project["schema_version"] not in SUPPORTED_SCHEMA_VERSIONS:
         raise ProjectValidationError(f"unsupported schema_version: {project['schema_version']}")
+    if project["schema_version"] != SCHEMA_VERSION:
+        project, _ = migrate_project_document(project)
     if not isinstance(project["project_id"], str) or not project["project_id"].strip():
         raise ProjectValidationError("project_id must be a non-empty string")
     if not isinstance(project["name"], str) or not project["name"].strip():
@@ -224,6 +244,11 @@ def validate_project_document(project):
     validate_units(project["units"])
     validate_model_settings(project["model_settings"])
     validate_references(project["references"])
+    project["references"] = {
+        "geology_model_id": project["references"].get("geology_model_id"),
+        "grid_model_id": project["references"].get("grid_model_id"),
+        "flow_model_id": project["references"].get("flow_model_id"),
+    }
     if not isinstance(project["metadata"], dict):
         raise ProjectValidationError("metadata must be an object")
 
@@ -240,7 +265,7 @@ def build_project_document(payload, project_id=None):
     payload.setdefault("created_at", now)
     payload["modified_at"] = payload.get("modified_at") or now
     payload.setdefault("model_settings", {"model_type": "groundwater_flow", "flow_regime": "steady"})
-    payload.setdefault("references", {"geology_model_id": None, "flow_model_id": None})
+    payload.setdefault("references", {"geology_model_id": None, "grid_model_id": None, "flow_model_id": None})
     payload.setdefault("metadata", {})
     return validate_project_document(payload)
 

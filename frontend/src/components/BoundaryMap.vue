@@ -58,6 +58,7 @@ export default {
     wells: Array,
     kCells: Array,
     faults: Array, // 新增：接收断层数据
+    gridCells: { type: Array, default: () => [] },
     projectId: { type: String, default: null },
     projectCrs: { type: Object, default: null }
   },
@@ -68,6 +69,7 @@ export default {
       selectedSegmentIndex: null,
       gridLines: null,
       centerPoints: null,
+      backendGridCells: [],
       gridInfo: null,
       clickedCell: null,
       pendingBoundaryFile: null,
@@ -88,7 +90,14 @@ export default {
     configuredData: { deep: true, handler() { this.drawMap(); } },
     wells: { deep: true, handler() { this.drawMap(); } },
     kCells: { deep: true, handler() { this.drawMap(); } },
-    faults: { deep: true, handler() { this.drawMap(); } } // 监听断层数据变化重绘地图
+    faults: { deep: true, handler() { this.drawMap(); } }, // 监听断层数据变化重绘地图
+    gridCells: {
+      immediate: true,
+      deep: true,
+      handler(cells) {
+        this.applyGridRenderData(cells || []);
+      }
+    }
   },
   mounted() {
     window.addEventListener('resize', this.onResize);
@@ -287,6 +296,48 @@ export default {
         }
         return inside;
     },
+    applyGridRenderData(cells) {
+      this.backendGridCells = Array.isArray(cells) ? cells : [];
+      if (this.backendGridCells.length === 0) {
+        this.gridLines = null;
+        this.centerPoints = null;
+        this.gridInfo = null;
+        this.clickedCell = null;
+        this.drawMap();
+        return;
+      }
+
+      const gridX = [];
+      const gridY = [];
+      const centerX = [];
+      const centerY = [];
+      const cellRefs = [];
+      const cellsById = {};
+      let nrow = 0;
+      let ncol = 0;
+
+      this.backendGridCells
+        .filter(cell => cell.layer === 0 && cell.footprint && cell.footprint.length > 0)
+        .forEach(cell => {
+          cell.footprint.forEach(point => {
+            gridX.push(point.x);
+            gridY.push(point.y);
+          });
+          gridX.push(null);
+          gridY.push(null);
+          centerX.push(cell.x);
+          centerY.push(cell.y);
+          cellRefs.push(cell);
+          cellsById[cell.cell_id] = cell;
+          nrow = Math.max(nrow, (cell.row || 0) + 1);
+          ncol = Math.max(ncol, (cell.col || cell.column || 0) + 1);
+        });
+
+      this.gridLines = { x: gridX, y: gridY };
+      this.centerPoints = { x: centerX, y: centerY, cells: cellRefs };
+      this.gridInfo = { backend: true, nrow, ncol, cellsById };
+      this.drawMap();
+    },
     previewGrid(inputCellSize) {
       if (!this.boundary || this.boundary.length === 0) return;
       
@@ -330,8 +381,36 @@ export default {
       this.gridLines = null; this.centerPoints = null; this.clickedCell = null;
       this.drawMap();
     },
+    findRenderedCell(selection) {
+      if (!selection) return null;
+      if (selection.cell_id) {
+        return this.backendGridCells.find(cell => cell.cell_id === selection.cell_id) || null;
+      }
+      return this.backendGridCells.find(cell => (
+        cell.layer === (selection.layer || 0)
+        && cell.row === selection.row
+        && (cell.col === selection.col || cell.column === selection.col)
+      )) || null;
+    },
+    footprintTrace(cell, options) {
+      if (!cell || !cell.footprint || cell.footprint.length === 0) return null;
+      return {
+        x: cell.footprint.map(point => point.x),
+        y: cell.footprint.map(point => point.y),
+        mode: 'lines',
+        fill: options.fill ? 'toself' : undefined,
+        fillcolor: options.fillcolor,
+        line: { color: options.color, width: options.width || 1 },
+        hoverinfo: options.text ? 'text' : 'skip',
+        text: options.text || undefined
+      };
+    },
     drawMap() {
-      if ((!this.boundary || this.boundary.length === 0) && (!this.faults || this.faults.length === 0)) return;
+      if (
+        (!this.boundary || this.boundary.length === 0)
+        && (!this.faults || this.faults.length === 0)
+        && (!this.backendGridCells || this.backendGridCells.length === 0)
+      ) return;
       const traces = [];
 
       // 1. 网格
@@ -345,7 +424,10 @@ export default {
       if (this.centerPoints && this.mode === 'cell') {
         traces.push({
           x: this.centerPoints.x, y: this.centerPoints.y, mode: 'markers',
-          marker: { size: 20, opacity: 0 }, hoverinfo: 'none', name: 'GhostGrid'
+          marker: { size: 20, opacity: 0 },
+          customdata: this.centerPoints.cells || null,
+          hoverinfo: 'none',
+          name: 'GhostGrid'
         });
       }
       // 3. 边界
@@ -374,6 +456,18 @@ export default {
       if (this.kCells && this.gridInfo) {
         const { minX, maxY, delr, delc } = this.gridInfo;
         this.kCells.forEach(cell => {
+            const rendered = this.findRenderedCell(cell);
+            const trace = this.footprintTrace(rendered, {
+              fill: true,
+              fillcolor: 'rgba(64, 158, 255, 0.6)',
+              color: '#409EFF',
+              text: `K=${cell.k_val}`
+            });
+            if (trace) {
+              traces.push(trace);
+              return;
+            }
+            if (this.gridInfo.backend) return;
             const x0 = minX + cell.col * delr;
             const y1 = maxY - cell.row * delc;
             const y0 = maxY - (cell.row + 1) * delc;
@@ -387,6 +481,18 @@ export default {
       if (this.wells && this.gridInfo) {
         const { minX, maxY, delr, delc } = this.gridInfo;
         this.wells.forEach(w => {
+            const rendered = this.findRenderedCell(w);
+            const trace = this.footprintTrace(rendered, {
+              fill: true,
+              fillcolor: 'rgba(255, 200, 0, 0.7)',
+              color: '#E6A23C',
+              text: `Well Q=${w.rate}`
+            });
+            if (trace) {
+              traces.push(trace);
+              return;
+            }
+            if (this.gridInfo.backend) return;
             const x0 = minX + w.col * delr;
             const y1 = maxY - w.row * delc;
             const y0 = maxY - (w.row + 1) * delc;
@@ -398,6 +504,14 @@ export default {
         });
       }
       if (this.clickedCell && this.gridInfo) {
+        const rendered = this.findRenderedCell(this.clickedCell);
+        const trace = this.footprintTrace(rendered, {
+          color: '#FF0000',
+          width: 3
+        });
+        if (trace) {
+          traces.push(trace);
+        } else if (!this.gridInfo.backend) {
         const { minX, maxY, delr, delc } = this.gridInfo;
         const c = this.clickedCell;
         const x0 = minX + c.col * delr; 
@@ -407,6 +521,7 @@ export default {
             x: [x0, x0 + delr, x0 + delr, x0, x0], y: [y0, y0, y1, y1, y0],
             mode: 'lines', line: { color: '#FF0000', width: 3 }, hoverinfo: 'skip'
         });
+        }
       }
 
       // 6. 边界条件渲染
@@ -463,8 +578,20 @@ export default {
        if (clickX === undefined) return;
 
        if (this.mode === 'cell') {
+           const clickedBackendCell = data.points
+             && data.points[0]
+             && data.points[0].customdata
+             ? data.points[0].customdata
+             : null;
+           if (clickedBackendCell) {
+             this.clickedCell = clickedBackendCell;
+             this.drawMap();
+             this.$emit('grid-clicked', clickedBackendCell);
+             return;
+           }
            if (this.gridInfo) {
              const { minX, maxY, delr, delc, ncol, nrow } = this.gridInfo;
+             if (this.gridInfo.backend) return;
              const col = Math.floor((clickX - minX) / delr);
              const row = Math.floor((maxY - clickY) / delc);
 

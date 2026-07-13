@@ -28,10 +28,10 @@ class MF6Builder:
         # ⭐ 核心防崩修复 1：在创建 GWF 模型时，直接传入 newtonoptions='NEWTON' 开启牛顿-拉夫逊迭代
         self.gwf = flopy.mf6.ModflowGwf(self.sim, modelname='gwf', save_flows=True, newtonoptions='NEWTON')
 
-    def setup_dis(self, nlay, nrow, ncol, delr, delc, top, botm, idomain, origin_x, origin_y):
+    def setup_dis(self, nlay, nrow, ncol, delr, delc, top, botm, idomain, origin_x, origin_y, rotation=0.0):
         flopy.mf6.ModflowGwfdis(self.gwf, length_units='METERS', nlay=nlay, nrow=nrow, ncol=ncol,
                                 delr=delr, delc=delc, top=top, botm=botm, idomain=idomain,
-                                xorigin=origin_x, yorigin=origin_y)
+                                xorigin=origin_x, yorigin=origin_y, angrot=rotation)
 
     def setup_npf(self, k_global, k_cells, nlay, nrow, ncol):
         k_array = np.full((nlay, nrow, ncol), float(k_global))
@@ -51,6 +51,10 @@ class MF6Builder:
         nrow, ncol = active_2d.shape
         origin_x, origin_y = grid_info['origin_x'], grid_info['origin_y']
         delr, delc = grid_info['delr'], grid_info['delc']
+        delr_arr = np.asarray(delr, dtype=float) if np.ndim(delr) else np.full(ncol, float(delr))
+        delc_arr = np.asarray(delc, dtype=float) if np.ndim(delc) else np.full(nrow, float(delc))
+        x_centers = grid_info.get('x_centers')
+        y_centers = grid_info.get('y_centers')
         chd_data, riv_data, drn_data, ghb_data = [], [], [], []
 
         for b_cfg in custom_boundaries:
@@ -60,8 +64,12 @@ class MF6Builder:
             for i in range(nrow):
                 for j in range(ncol):
                     if active_2d[i, j] == 0: continue
-                    cx, cy = origin_x + j * delr + delr / 2, origin_y + (nrow - 1 - i) * delc + delc / 2
-                    if line.distance(Point(cx, cy)) < (delr + delc) / 4:
+                    if x_centers is not None and y_centers is not None:
+                        cx, cy = float(x_centers[i, j]), float(y_centers[i, j])
+                    else:
+                        cx = origin_x + float(np.sum(delr_arr[:j])) + delr_arr[j] / 2
+                        cy = origin_y + float(np.sum(delc_arr)) - float(np.sum(delc_arr[:i])) - delc_arr[i] / 2
+                    if line.distance(Point(cx, cy)) < (delr_arr[j] + delc_arr[i]) / 4:
                         ratio = line.project(Point(cx, cy)) / line.length if line.length > 0 else 0.0
                         if b_type == 'CHD':
                             chd_data.append([(0, i, j), float(b_cfg.get('head_start', 10)) + (

@@ -1,13 +1,13 @@
 # Project Overview
 
 审计日期：2026-07-12  
-最近实现更新：2026-07-12，新增 `geology_model` schema v1.0、后端校验与持久化、地质模型重建 API。
+最近实现更新：2026-07-13，新增 `grid_model` schema v1.0、稳定 `cell_id`、后端权威 DIS 网格、Grid Store artifact 和前端 Grid API 接入。
 
 ## 项目定位
 
 本项目当前是一个地下水数值建模功能原型，目标方向是基于 MODFLOW 6 和 FloPy 的 GMS-like groundwater-flow workflow。当前代码已经把若干关键环节串成了端到端链路：导入边界和钻孔、生成结构化网格、构建 FloPy/MODFLOW 6 模型、运行后读取水头和预算文件，并用 Three.js 展示三维单元、水头颜色和局部流向。
 
-项目尚未达到生产级数值建模软件要求。尤其需要注意：页面上存在的部分源汇项功能不一定真正进入 FloPy package；部分后端能力没有被 UI 接入；流场配置和运行历史还没有正式 schema。项目定义和地质模型已经可以后端持久化，运行目录也已改为独立目录并可保留诊断材料。
+项目尚未达到生产级数值建模软件要求。尤其需要注意：页面上存在的部分源汇项功能不一定真正进入 FloPy package；部分后端能力没有被 UI 接入；流场配置和运行历史还没有正式 schema。项目定义、地质模型和结构化网格模型已经可以后端持久化，运行目录也已改为独立目录并可保留诊断材料。
 
 ## 实际阅读文件
 
@@ -20,6 +20,9 @@
 - `backend/geology_model_schema.py`
 - `backend/geology_model_service.py`
 - `backend/geology_model_store.py`
+- `backend/grid_model_schema.py`
+- `backend/grid_model_service.py`
+- `backend/grid_model_store.py`
 - `backend/geometry_tools.py`
 - `backend/geometry_utils.py`
 - `backend/mf6_wrapper.py`
@@ -90,8 +93,9 @@
 - Vue 2.7、Element UI、Three.js、Plotly、Axios。
 - 项目上下文由 `App.vue` 的 `currentProject` 统一持有，并通过 `projectId` prop 传给子组件。
 - API 地址多处硬编码为 `http://localhost:5000`。
-- 项目定义使用 `modflow_project` schema v1.0，可由后端保存到 `backend/projects/<project_id>/project.json`。
+- 项目定义使用 `modflow_project` schema v1.1，可由后端保存到 `backend/projects/<project_id>/project.json`，并引用 active `geology_model_id/grid_model_id/flow_model_id`。
 - 地质模型使用 `geology_model` schema v1.0，可由后端保存到 `backend/projects/<project_id>/geology/geology_model.json`；前端新项目包导出为 `project + geology_model + state`。
+- 网格模型使用 `grid_model` schema v1.0，可由后端保存到 `backend/projects/<project_id>/grid/grid_model.json` 和 `grid/artifacts/grid_arrays.npz`；前端 2D/3D 网格显示来自后端 `render-data`。
 
 后端：
 
@@ -102,6 +106,7 @@
 - `GEO_MODELS` 全局字典仍缓存 `GeologicalModeler`，但现在只是可重建缓存：权威地质数据来自持久化 `geology_model.json`。
 - `ProjectStore` 文件存储保存正式项目定义，进程重启后可重新读取项目元数据。
 - `GeologyModelStore` 文件存储保存 active geology model，进程重启或清空缓存后可由标准化钻孔/地层/断层/插值参数重建。
+- `GridModelStore` 文件存储保存 active structured DIS grid manifest 和数组 artifact，进程重启后可校验 checksum 并恢复 `top/botm/idomain/cell_id`。
 - MF6 运行目录使用 `backend/workspace/<run-id>`，失败默认保留，成功保留由环境变量控制。
 
 ## 已真正实现的核心功能
@@ -111,9 +116,12 @@
 - 上传边界 Shapefile ZIP，读取第一个 `.shp` 的首个几何对象，转为边界坐标。
 - 上传钻孔 CSV/XLSX，读取钻孔、坐标、分层、高程或厚度，构建 `GeologicalModeler`。
 - 将边界、钻孔、地层、断层和插值参数标准化为 `geology_model`，进行后端校验、诊断和持久化。
-- 根据边界包围盒和 X/Y 网格参数生成结构化规则网格。
-- 根据单元中心是否在边界多边形内生成 `active_2d`。
+- 根据 active geology model 生成后端唯一结构化 DIS 网格，并持久化为 `grid_model`。
+- 使用单元 polygon 与边界 polygon 的相交面积生成 `active_2d`，而不再把单元中心点作为权威激活规则。
 - 对每个地层 ID 插值生成 Top/Bottom 面，并强制层序不交叉。
+- 保存统一 shape 的 `top (nrow,ncol)`、`botm (nlay,nrow,ncol)`、分层 `idomain (nlay,nrow,ncol)`。
+- 为每个单元提供稳定 0-based `cell_id = <grid_model_id>:L<layer>:R<row>:C<column>`。
+- 提供 Grid Model quality report，覆盖 shape、非有限数、负厚度、空层、连接性、边界覆盖和尺度摘要。
 - 生成 MODFLOW 6 DIS、NPF、IC、OC package。
 - 支持全局 K 和指定单元 K 覆盖。
 - 支持 WEL package。
@@ -135,7 +143,7 @@
 - MF6 可执行文件已通过统一 resolver 处理；MODPATH 路径仍是后续技术债。
 - 正常流程已不再隐式使用 `project_id='default'`；后端项目相关接口要求显式 `project_id`。
 - 运行目录已改为独立目录，失败默认保留；正式 run manifest 和清理策略仍需完善。
-- 已有自动化测试和最小稳定流数值基准；主应用运行结果仍缺正式水量平衡和收敛验收。
+- 已有自动化测试、Grid Model 后端/API 测试和最小稳定流数值基准；主应用运行结果仍缺正式水量平衡和收敛验收。
 - CRS、长度单位、时间单位和流量单位已进入 Project Schema；Shapefile 边界上传会读取 CRS 并拒绝缺失或冲突。钻孔/断层 CSV 当前按用户声明的项目 CRS 解释，重投影和各 package 单位换算仍未实现。
 
 ## 需要验证的信息
@@ -144,4 +152,5 @@
 - 不同机器上的 MF6 resolver 行为需要通过 `python -m pytest` 持续验证。
 - MODPATH 运行是否可用，因为代码硬编码到 `G:\workspace\flopy-project\modpath7\bin\mpath7.exe`。
 - 当前返回的六面流量是否与 MODFLOW 6 cell-by-cell budget 严格一致，需要用标准模型对照验证。
+- Grid Model 已经持久化 `top/botm/idomain`，但 Flow Model 尚未正式 schema 化，IC/NPF/CHD/WEL 参数保存和迁移仍需要验证。
 - 断层当前明确仅用于地质插值分区，不是 MODFLOW HFB；其地质合理性和数值稳定性需要用人工控制案例验证。

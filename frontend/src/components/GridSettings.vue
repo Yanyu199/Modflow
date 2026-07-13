@@ -28,6 +28,21 @@
       </div>
     </div>
 
+    <div class="grid-controls">
+      <div class="axis-panel">
+        <div class="axis-header">旋转角度 (deg)</div>
+        <el-input-number v-model="config.rotation" :step="5" :min="-360" :max="360" size="mini" controls-position="right" class="num-input"></el-input-number>
+      </div>
+      <div class="axis-panel">
+        <div class="axis-header">最小厚度 (m)</div>
+        <el-input-number v-model="config.minimum_thickness" :step="0.1" :min="0" size="mini" controls-position="right" class="num-input"></el-input-number>
+      </div>
+      <div class="axis-panel">
+        <div class="axis-header">边界重叠阈值</div>
+        <el-input-number v-model="config.minimum_boundary_overlap" :step="0.05" :min="0" :max="1" size="mini" controls-position="right" class="num-input"></el-input-number>
+      </div>
+    </div>
+
     <el-button type="primary" size="small" class="full-btn" @click="emitPreview">
       <i class="el-icon-s-grid"></i> 生成 / 更新三维网格
     </el-button>
@@ -39,7 +54,17 @@ export default {
   props: { value: Object },
   data() {
     return {
-      config: { x_mode: 'size', x_val: 1000, y_mode: 'size', y_val: 1000, n_layers: 1, z_thick: 10 }
+      config: {
+        x_mode: 'size',
+        x_val: 1000,
+        y_mode: 'size',
+        y_val: 1000,
+        n_layers: 1,
+        z_thick: 10,
+        rotation: 0,
+        minimum_thickness: 0.1,
+        minimum_boundary_overlap: 0.1
+      }
     };
   },
   watch: {

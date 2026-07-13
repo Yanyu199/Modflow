@@ -128,6 +128,40 @@ class GeologyModelService:
     def _project(self, project_id):
         return self.project_store.get(project_id)
 
+    def _references_with_geology(self, project, geology_model_id):
+        references = project.get("references", {})
+        return {
+            "geology_model_id": geology_model_id,
+            "grid_model_id": references.get("grid_model_id"),
+            "flow_model_id": references.get("flow_model_id"),
+        }
+
+    def _mark_grid_stale(self, project_id, reason, geology=None):
+        try:
+            from grid_model_service import GridModelService
+
+            GridModelService(self.project_store, self.geology_store).mark_stale_for_project(project_id, reason, geology)
+        except Exception:
+            return None
+
+    def _mark_derived_ready(self, project, model):
+        ready = copy.deepcopy(model)
+        derived = copy.deepcopy(ready.get("derived_artifacts") or {})
+        if derived.get("input_hash"):
+            derived["status"] = "ready"
+            derived["mode"] = derived.get("mode") or "rebuild_from_standardized_inputs"
+            ready["derived_artifacts"] = derived
+            return self.geology_store.save(project, ready)
+        return model
+
+    def _can_rebuild_cache(self, model):
+        formations = (model.get("stratigraphy") or {}).get("formations") or []
+        return bool(
+            model.get("diagnostics", {}).get("valid")
+            and model.get("boreholes")
+            and formations
+        )
+
     def active_or_empty(self, project):
         try:
             return self.geology_store.get_active(project)
@@ -142,7 +176,7 @@ class GeologyModelService:
         project = self._project(project_id)
         model = require_valid_geology_model(payload, project)
         saved = self.geology_store.save(project, model)
-        self.project_store.update(project_id, {"references": {"geology_model_id": saved["geology_model_id"], "flow_model_id": project["references"].get("flow_model_id")}})
+        self.project_store.update(project_id, {"references": self._references_with_geology(project, saved["geology_model_id"])})
         return saved
 
     def update(self, project_id, geology_model_id, payload):
@@ -153,7 +187,10 @@ class GeologyModelService:
         model = validate_geology_model(payload, project, existing=existing, allow_incomplete=False)
         if not model["diagnostics"]["valid"]:
             raise GeologyModelValidationError(model["diagnostics"])
-        return self.geology_store.save(project, model)
+        saved = self.geology_store.save(project, model)
+        if existing.get("derived_artifacts", {}).get("input_hash") != saved.get("derived_artifacts", {}).get("input_hash"):
+            self._mark_grid_stale(project_id, "active geology model changed", saved)
+        return saved
 
     def get_active(self, project_id):
         project = self._project(project_id)
@@ -164,6 +201,8 @@ class GeologyModelService:
         if not model["diagnostics"]["valid"]:
             raise GeologyModelValidationError(model["diagnostics"])
         cache[project_id] = build_geological_modeler_from_geology_model(model)
+        project = self._project(project_id)
+        model = self._mark_derived_ready(project, model)
         return model, normalized_to_frontend(model)
 
     def ensure_cache(self, project_id, cache):
@@ -181,9 +220,12 @@ class GeologyModelService:
         if model["diagnostics"]["errors"]:
             raise GeologyModelValidationError(model["diagnostics"])
         saved = self.geology_store.save(project, model)
-        self.project_store.update(project_id, {"references": {"geology_model_id": saved["geology_model_id"], "flow_model_id": project["references"].get("flow_model_id")}})
-        if cache is not None and rebuild_cache and saved["boreholes"] and saved["stratigraphy"]["formations"]:
+        self.project_store.update(project_id, {"references": self._references_with_geology(project, saved["geology_model_id"])})
+        if existing.get("derived_artifacts", {}).get("input_hash") != saved.get("derived_artifacts", {}).get("input_hash"):
+            self._mark_grid_stale(project_id, "geology inputs changed", saved)
+        if cache is not None and rebuild_cache and self._can_rebuild_cache(saved):
             cache[project_id] = build_geological_modeler_from_geology_model(saved)
+            saved = self._mark_derived_ready(project, saved)
         return saved
 
     def update_boreholes_from_upload(self, project_id, file_obj, raw_csv=None, cache=None):
@@ -203,11 +245,11 @@ class GeologyModelService:
             "boundary": boundary_feature,
             "provenance": {"last_boundary_source": source_metadata or {"kind": "unknown"}},
         }
-        return self.save_partial(project_id, patch, cache=cache, rebuild_cache=False)
+        return self.save_partial(project_id, patch, cache=cache, rebuild_cache=True)
 
     def update_faults(self, project_id, faults, source_metadata=None, cache=None):
         patch = {
             "faults": faults,
             "provenance": {"last_fault_source": source_metadata or {"kind": "user_declared_project_crs"}},
         }
-        return self.save_partial(project_id, patch, cache=cache, rebuild_cache=False)
+        return self.save_partial(project_id, patch, cache=cache, rebuild_cache=True)

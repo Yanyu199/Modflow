@@ -1,43 +1,87 @@
 # backend/modflow_engine.py
 import os, traceback, numpy as np
+from shapely.geometry import Point
 from geometry_tools import generate_grid_info, map_zones_to_grid
 from mf6_wrapper import MF6Builder, BASE_DIR
 from post_process import process_results, process_pathlines
 from run_workspace import cleanup_run_workspace, create_run_workspace
 
 
+def _grid_info_from_grid_model(grid_model):
+    manifest = grid_model["manifest"]
+    arrays = grid_model["arrays"]
+    geometry = manifest["geometry"]
+    idomain = arrays["idomain"].astype(int)
+    active_2d = (np.any(idomain == 1, axis=0)).astype(int)
+    nrow, ncol = geometry["nrow"], geometry["ncol"]
+    grid_centers = [[Point(float(arrays["x_centers"][i, j]), float(arrays["y_centers"][i, j])) for j in range(ncol)] for i in range(nrow)]
+    return {
+        "ncol": ncol,
+        "nrow": nrow,
+        "delr": arrays["delr"],
+        "delc": arrays["delc"],
+        "origin_x": geometry["xorigin"],
+        "origin_y": geometry["yorigin"],
+        "rotation": geometry.get("rotation", 0.0),
+        "active_2d": active_2d,
+        "grid_centers": grid_centers,
+        "grid_x": arrays["x_centers"],
+        "grid_y": arrays["y_centers"],
+        "x_centers": arrays["x_centers"],
+        "y_centers": arrays["y_centers"],
+        "grid_model_id": manifest["grid_model_id"],
+    }
+
+
+def _layer_tops_from_arrays(top, botm):
+    layer_tops = []
+    for k in range(botm.shape[0]):
+        layer_tops.append(top if k == 0 else botm[k - 1])
+    return layer_tops
+
+
 def run_simulation(params, boundary_coords, custom_boundaries=[], geo_model=None, wells=[], k_cells=[], rch_data=[],
-                   evt_data=[], mp_start_cell=None, faults=None, keep_run_dir=None): # 新增 faults 参数
+                   evt_data=[], mp_start_cell=None, faults=None, keep_run_dir=None, grid_model=None): # 新增 faults 参数
     run_id, WORK_DIR = create_run_workspace(prefix="api-run", workspace_root=os.path.join(BASE_DIR, "workspace"))
     logs = []
     success = False
     try:
         logs.append(f"🚀 Starting Simulation [{run_id}]...")
         logs.append(f"📁 工作目录: {WORK_DIR}")
-        grid = generate_grid_info(params, boundary_coords)
+        if grid_model is not None:
+            logs.append("📦 使用持久化 Grid Model 作为权威 DIS 网格")
+            grid = _grid_info_from_grid_model(grid_model)
+            mf_top = grid_model["arrays"]["top"]
+            mf_botm = grid_model["arrays"]["botm"]
+            idomain = grid_model["arrays"]["idomain"].astype(int)
+            nlay = int(grid_model["manifest"]["geometry"]["nlay"])
+            top_arrays = _layer_tops_from_arrays(mf_top, mf_botm)
+            bot_arrays = [mf_botm[k] for k in range(nlay)]
+        else:
+            grid = generate_grid_info(params, boundary_coords)
 
-        if geo_model is None:
-            logs.append("❌ 未提供有效的钻孔地层模型数据")
-            return None, "\n".join(logs)
+            if geo_model is None:
+                logs.append("❌ 未提供有效的钻孔地层模型数据")
+                return None, "\n".join(logs)
 
-        logs.append("⏳ 正在进行三维地层插值与断层/尖灭拓扑计算...")
-        # 传入断层数据 faults
-        surfaces = geo_model.interpolate_surfaces(grid['grid_x'], grid['grid_y'], faults)
-        nlay = len(geo_model.layers)
+            logs.append("⏳ 正在进行三维地层插值与断层/尖灭拓扑计算...")
+            # 传入断层数据 faults
+            surfaces = geo_model.interpolate_surfaces(grid['grid_x'], grid['grid_y'], faults)
+            nlay = len(geo_model.layers)
 
-        top_arrays = []
-        bot_arrays = []
+            top_arrays = []
+            bot_arrays = []
 
-        for layer_id in geo_model.layers:
-            top_arrays.append(surfaces[layer_id]['Top'])
-            bot_arrays.append(surfaces[layer_id]['Bottom'])
+            for layer_id in geo_model.layers:
+                top_arrays.append(surfaces[layer_id]['Top'])
+                bot_arrays.append(surfaces[layer_id]['Bottom'])
 
-        # Flopy MF6 格式要求：top 是顶板 2D 数组，botm 是各层底板组成的 3D 数组
-        mf_top = top_arrays[0]
-        mf_botm = np.stack(bot_arrays, axis=0)
+            # Flopy MF6 格式要求：top 是顶板 2D 数组，botm 是各层底板组成的 3D 数组
+            mf_top = top_arrays[0]
+            mf_botm = np.stack(bot_arrays, axis=0)
 
-        idomain = np.zeros((nlay, grid['nrow'], grid['ncol']), dtype=int)
-        for k in range(nlay): idomain[k, :, :] = grid['active_2d']
+            idomain = np.zeros((nlay, grid['nrow'], grid['ncol']), dtype=int)
+            for k in range(nlay): idomain[k, :, :] = grid['active_2d']
 
         rch_arr = map_zones_to_grid(rch_data, grid['nrow'], grid['ncol'], grid['active_2d'], grid['grid_centers'])
         evt_arr = map_zones_to_grid(evt_data, grid['nrow'], grid['ncol'], grid['active_2d'], grid['grid_centers'])
@@ -47,7 +91,7 @@ def run_simulation(params, boundary_coords, custom_boundaries=[], geo_model=None
 
         # 传入新的 mf_top 和 mf_botm
         builder.setup_dis(nlay, grid['nrow'], grid['ncol'], grid['delr'], grid['delc'], mf_top, mf_botm, idomain,
-                          grid['origin_x'], grid['origin_y'])
+                          grid['origin_x'], grid['origin_y'], grid.get('rotation', 0.0))
         builder.setup_npf(params.get("k", 10.0), k_cells, nlay, grid['nrow'], grid['ncol'])
         builder.setup_boundary_conditions(grid['active_2d'], custom_boundaries, wells, rch_arr, evt_arr, mf_top, grid)
 

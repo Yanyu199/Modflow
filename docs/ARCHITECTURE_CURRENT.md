@@ -13,7 +13,8 @@ flowchart LR
   GeoSchema["geology_model v1.0 validation"]
   Geo["GeoPandas / Shapely"]
   Modeler["GeologicalModeler"]
-  Grid["geometry_tools.generate_grid_info"]
+  GridSvc["GridModelService"]
+  GridStore["GridModelStore / grid_model.json + grid_arrays.npz"]
   FloPy["FloPy MF6Builder"]
   MF6["MODFLOW 6 executable"]
   Post["post_process"]
@@ -33,10 +34,12 @@ flowchart LR
   Modeler -->|rebuildable cache in GEO_MODELS| Flask
   Modeler -->|boreholes/layer_mapping| Browser
 
-  Browser -->|preview/run params| Flask
-  Flask --> Grid
-  Grid --> Modeler
-  Modeler -->|top/bottom arrays| FloPy
+  Browser -->|grid config| Flask
+  Flask --> GridSvc
+  GridSvc --> GeologyStore
+  GridSvc --> Modeler
+  GridSvc -->|manifest + arrays| GridStore
+  GridStore -->|top/botm/idomain/delr/delc| FloPy
   FloPy --> MF6
   MF6 -->|hds/bud/lst| Post
   Post -->|points/pathlines/logs| Browser
@@ -103,20 +106,33 @@ flowchart LR
 
 ## 网格数据流
 
-1. 前端 `GridSettings.vue` 设置 X/Y 的尺寸或数量。
-2. `App.vue` 调用 `/preview-geometry` 或 `/run-model`。
-3. `geometry_tools.generate_grid_info()`：
-   - 由边界 polygon 的 bounds 计算 `nrow/ncol/delr/delc`。
-   - 由单元中心是否在 polygon 内生成 `active_2d`。
-   - 生成插值用 `grid_x/grid_y`。
-4. `get_grid_geometry()` 仅返回几何预览点，不运行 MODFLOW。
-5. `run_simulation()` 将 `active_2d` 复制到所有层形成 `idomain`。
+正常流程已经改为后端唯一 Grid Model：
 
-重要风险：
+1. 前端 `GridSettings.vue` 设置 X/Y cell size 或数量、rotation、minimum thickness、minimum boundary overlap。
+2. `App.vue` 调用 `POST /projects/<project_id>/grids`。
+3. `GridModelService` 读取 active `geology_model`，验证 diagnostics 和 derived artifact 状态。
+4. 后端根据 geology boundary bounds、rotation 和 cell size 生成结构化 DIS 网格。
+5. 每个二维单元构造 polygon，使用实际相交面积计算 `overlap_ratio` 和 `active_2d`。
+6. `GeologicalModeler.interpolate_surfaces()` 在同一网格中心生成地层面。
+7. `GridModelService` 保存：
+   - `top.shape == (nrow, ncol)`
+   - `botm.shape == (nlay, nrow, ncol)`
+   - `idomain.shape == (nlay, nrow, ncol)`
+   - `delr/delc/x_centers/y_centers/thickness/overlap_ratio`
+8. `GridModelStore` 写入 `backend/projects/<project_id>/grid/grid_model.json` 和 `grid/artifacts/grid_arrays.npz`，并记录 checksum。
+9. 前端通过 `GET /render-data` 获取 footprint、中心坐标、top/bottom/thickness/idomain 和 `cell_id`，用于 Plotly/Three.js 显示和单元点击。
+10. `/run-model` 必须携带 `grid_model_id`，从 Grid Store 读取 DIS 数组，不接受前端覆盖 `top/botm/idomain`。
 
-- 前端 `BoundaryMap.previewGrid()` 自己计算 2D 网格，并强制 `nrow/ncol >= 5`；后端没有这个强制最小值。前端点击得到的 `row/col` 可能和后端实际 DIS 网格不一致。
-- `idomain` 在所有层完全相同，不考虑局部尖灭层的 inactive cell。
+兼容说明：
+
+- `POST /preview-geometry` 仍存在，但现在是兼容 wrapper，会创建 Grid Model 并返回 render-data。
+- 前端 `BoundaryMap.previewGrid()` 保留为旧 fallback，但正常入口不再调用它作为权威网格来源。
+
+当前限制：
+
 - 只支持结构化 DIS 网格。
+- 一个项目当前只有一个 active grid manifest；历史 grid/run 关联仍待 run manifest 处理。
+- `FlowModel` 尚未正式 schema 化，井、K、边界条件仍经 legacy adapter 进入 `/run-model`。
 
 ## FloPy/MODFLOW 6 创建流程
 
@@ -133,6 +149,7 @@ flowchart LR
 - 使用插值后的 `top` 和 `botm`
 - 使用 `idomain`
 - 设置 `xorigin/yorigin`
+- 当使用 Grid Model 时，还传入 `angrot` 和 `delr/delc` 数组。
 
 `setup_npf()`：
 
@@ -220,10 +237,18 @@ flowchart LR
 | `POST /upload-boreholes` | 是 | 是 | 兼容入口；调用统一 geology service |
 | `POST /upload-faults` | 是 | 是 | 兼容入口；断层只影响插值 |
 | `POST /upload-shapefile` | 是 | 是 | 兼容入口；检查 ZIP 安全和 Shapefile CRS |
+| `POST /projects/<project_id>/grids/validate-config` | 是 | 是 | 验证 Grid Model 生成配置 |
+| `POST /projects/<project_id>/grids` | 是 | 是 | 创建 active Grid Model 并持久化 manifest/artifact |
+| `GET /projects/<project_id>/grids/active` | 间接 | 是 | 读取 active grid |
+| `GET /projects/<project_id>/grids/<grid_model_id>/summary` | 否 | 是 | 返回 geometry/generation/quality summary |
+| `GET /projects/<project_id>/grids/<grid_model_id>/quality` | 否 | 是 | 返回结构化质量报告 |
+| `GET /projects/<project_id>/grids/<grid_model_id>/cells/<cell_id>` | 是 | 是 | 返回后端权威 cell detail |
+| `GET /projects/<project_id>/grids/<grid_model_id>/render-data` | 是 | 是 | 返回 2D/3D 渲染数据和稳定 cell_id |
+| `POST /projects/<project_id>/grids/<grid_model_id>/rebuild` | 否 | 是 | 用原 generation 重建新 active grid |
 | `POST /upload-zone` | 否 | 是 | 后端已实现但 UI 未接入 |
 | `POST /upload-scatter` | 是 | 否 | UI 已存在但后端未实现 |
-| `POST /preview-geometry` | 是 | 是 | 可用；缓存缺失时从 active geology model 重建 |
-| `POST /run-model` | 是 | 是 | 可用；缓存缺失时从 active geology model 重建，数值验收不足 |
+| `POST /preview-geometry` | 兼容 | 是 | 兼容 wrapper；内部创建 Grid Model |
+| `POST /run-model` | 是 | 是 | 必须携带 `grid_model_id`；从 Grid Store 加载 DIS 数组，数值验收不足 |
 | `POST /export-model` | 是 | 是 | 可用，OBJ 网格尺寸由点分布推断 |
 
 ## 状态存储
@@ -232,8 +257,9 @@ flowchart LR
 |---|---|---|
 | 项目定义 | `backend/projects/<project_id>/project.json` | 已持久化；仍无数据库/权限系统 |
 | 地质模型标准数据 | `backend/projects/<project_id>/geology/geology_model.json` | active geology model 已持久化；派生面数组仍采用可重建策略 |
+| 网格模型 manifest/artifact | `backend/projects/<project_id>/grid/grid_model.json` 和 `grid/artifacts/grid_arrays.npz` | active grid 已持久化并校验 checksum；历史 grid/run 关联待实现 |
 | 钻孔地质模型缓存 | Flask 全局 `GEO_MODELS[project_id]` | 项目间隔离；可由持久化 geology model 重建 |
-| 井、K、RCH/EVT 和边界条件 | `App.vue` 内存和前端项目包 | 刷新后可由项目包恢复；正式 Flow schema 待实现 |
+| 井、K、RCH/EVT 和边界条件 | `App.vue` 内存和前端项目包 | 井/K 已逐步使用 `cell_id`；正式 Flow schema 待实现 |
 | 运行输入/输出 | `backend/workspace/<run-id>` | 失败默认保留；成功保留可配置；正式 run history 待实现 |
 | 前端项目文件 | 浏览器下载 `modflow_project_bundle` JSON | 新格式包含 `project`、`geology_model` 和流场 UI state |
 | MF6/MODPATH 可执行路径 | `mf6_executable.py` / `mf6_wrapper.py` | MF6 已统一解析；MODPATH 仍是后续技术债 |

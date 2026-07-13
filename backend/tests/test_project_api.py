@@ -1,7 +1,9 @@
 import io
+import json
 
 import app as app_module
 from geology_model_service import GeologyModelService
+from grid_model_service import GridModelService
 from project_store import ProjectStore
 
 
@@ -27,6 +29,7 @@ def project_payload(project_id=None, name="Project"):
         },
         "references": {
             "geology_model_id": None,
+            "grid_model_id": None,
             "flow_model_id": None,
         },
         "metadata": {},
@@ -40,6 +43,7 @@ def client_with_store(tmp_path, monkeypatch):
     store = ProjectStore(tmp_path / "projects")
     monkeypatch.setattr(app_module, "project_store", store)
     monkeypatch.setattr(app_module, "geology_service", GeologyModelService(store))
+    monkeypatch.setattr(app_module, "grid_service", GridModelService(store))
     app_module.GEO_MODELS.clear()
     app_module.app.config.update(TESTING=True)
     return app_module.app.test_client(), store
@@ -137,6 +141,23 @@ def test_project_definitions_survive_store_recreation(tmp_path, monkeypatch):
     reloaded = reloaded_store.get(project["project_id"])
 
     assert reloaded["name"] == project["name"]
+
+
+def test_project_store_migrates_1_0_project_on_read(tmp_path, monkeypatch):
+    client, store = client_with_store(tmp_path, monkeypatch)
+    project = create_project(client, project_id="legacy_project")
+    project_path = store.project_path(project["project_id"])
+    project["schema_version"] = "1.0"
+    project["references"].pop("grid_model_id")
+    project_path.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
+
+    migrated = store.get(project["project_id"])
+    persisted = json.loads(project_path.read_text(encoding="utf-8"))
+
+    assert migrated["schema_version"] == "1.1"
+    assert migrated["references"]["grid_model_id"] is None
+    assert persisted["schema_version"] == "1.1"
+    assert persisted["references"]["grid_model_id"] is None
 
 
 def borehole_csv(z):

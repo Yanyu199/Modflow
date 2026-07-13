@@ -17,6 +17,9 @@ from geology_model_schema import (
 )
 from geology_model_service import GeologyModelService
 from geology_model_store import GeologyModelNotFoundError
+from grid_model_schema import GridModelNotFoundError, GridModelValidationError, parse_cell_id
+from grid_model_service import GridModelService
+from grid_model_store import GridArtifactError
 from project_schema import ProjectValidationError
 from project_store import ProjectConflictError, ProjectNotFoundError, ProjectStore, validate_project_id
 
@@ -28,6 +31,7 @@ CORS(app)
 GEO_MODELS = {}
 project_store = ProjectStore()
 geology_service = GeologyModelService(project_store)
+grid_service = GridModelService(project_store)
 
 
 def api_error(message, status=400, code="validation_error", details=None):
@@ -65,6 +69,16 @@ def geology_exception_response(exc):
     return project_exception_response(exc)
 
 
+def grid_exception_response(exc):
+    if isinstance(exc, GridModelNotFoundError):
+        return api_error("网格模型不存在", 404, "grid_model_not_found")
+    if isinstance(exc, GridModelValidationError):
+        return api_error("网格模型数据无效", 400, "grid_model_validation_error", exc.diagnostics)
+    if isinstance(exc, GridArtifactError):
+        return api_error("网格数组产物无效", 400, "grid_artifact_invalid")
+    return project_exception_response(exc)
+
+
 def json_payload():
     return request.get_json(silent=True) or {}
 
@@ -97,6 +111,35 @@ def require_project_from_json(data):
 def truthy_form_value(name):
     value = request.form.get(name)
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_cell_selection(items, grid_model_id, shape, value_key=None):
+    normalized = []
+    warnings = []
+    for item in items or []:
+        item = dict(item or {})
+        if item.get("cell_id"):
+            parsed = parse_cell_id(item["cell_id"], expected_grid_model_id=grid_model_id, shape=shape)
+            layer, row, col = parsed["layer"], parsed["row"], parsed["column"]
+        else:
+            warnings.append({
+                "code": "LEGACY_ROW_COLUMN_SELECTION",
+                "message": "Legacy row/column/layer selection was accepted for this request; save future selections with cell_id.",
+            })
+            try:
+                layer = int(item.get("layer", 0))
+                row = int(item["row"])
+                col = int(item["col"] if item.get("col") is not None else item["column"])
+            except (KeyError, TypeError, ValueError):
+                raise ProjectValidationError("legacy row/column selection must include integer row and col/column")
+            if not (0 <= layer < shape[0] and 0 <= row < shape[1] and 0 <= col < shape[2]):
+                raise ProjectValidationError("legacy row/column selection is outside grid bounds")
+            item["cell_id"] = f"{grid_model_id}:L{layer}:R{row}:C{col}"
+        normalized_item = {**item, "layer": layer, "row": row, "col": col, "column": col}
+        if value_key and value_key in item:
+            normalized_item[value_key] = item[value_key]
+        normalized.append(normalized_item)
+    return normalized, warnings
 
 
 @app.route('/projects/validate', methods=['POST'])
@@ -208,6 +251,83 @@ def rebuild_geology_model(project_id, geology_model_id):
         return geology_exception_response(e)
 
 
+@app.route('/projects/<project_id>/grids/validate-config', methods=['POST'])
+def validate_grid_config_route(project_id):
+    try:
+        result = grid_service.validate_config(project_id, json_payload())
+        return jsonify(result)
+    except Exception as e:
+        return grid_exception_response(e)
+
+
+@app.route('/projects/<project_id>/grids', methods=['POST'])
+def create_grid_model(project_id):
+    try:
+        model = grid_service.create(project_id, json_payload())
+        return jsonify({
+            "success": True,
+            "grid_model_id": model["grid_model_id"],
+            "grid_model": model,
+            "summary": grid_service.summary(project_id, model["grid_model_id"]),
+            "quality": model["quality"],
+        }), 201
+    except Exception as e:
+        return grid_exception_response(e)
+
+
+@app.route('/projects/<project_id>/grids/active', methods=['GET'])
+def get_active_grid_model(project_id):
+    try:
+        model = grid_service.get_active(project_id)
+        return jsonify({"success": True, "grid_model": model})
+    except Exception as e:
+        return grid_exception_response(e)
+
+
+@app.route('/projects/<project_id>/grids/<grid_model_id>/summary', methods=['GET'])
+def get_grid_summary(project_id, grid_model_id):
+    try:
+        return jsonify({"success": True, "summary": grid_service.summary(project_id, grid_model_id)})
+    except Exception as e:
+        return grid_exception_response(e)
+
+
+@app.route('/projects/<project_id>/grids/<grid_model_id>/quality', methods=['GET'])
+def get_grid_quality(project_id, grid_model_id):
+    try:
+        return jsonify({"success": True, "quality": grid_service.quality(project_id, grid_model_id)})
+    except Exception as e:
+        return grid_exception_response(e)
+
+
+@app.route('/projects/<project_id>/grids/<grid_model_id>/cells/<cell_id_value>', methods=['GET'])
+def get_grid_cell(project_id, grid_model_id, cell_id_value):
+    try:
+        return jsonify({"success": True, "cell": grid_service.cell_detail(project_id, grid_model_id, cell_id_value)})
+    except Exception as e:
+        return grid_exception_response(e)
+
+
+@app.route('/projects/<project_id>/grids/<grid_model_id>/render-data', methods=['GET'])
+def get_grid_render_data(project_id, grid_model_id):
+    try:
+        layer = request.args.get("layer")
+        include_inactive = str(request.args.get("include_inactive", "")).lower() in {"1", "true", "yes", "on"}
+        data = grid_service.render_data(project_id, grid_model_id, layer=int(layer) if layer not in (None, "") else None, include_inactive=include_inactive)
+        return jsonify({"success": True, **data})
+    except Exception as e:
+        return grid_exception_response(e)
+
+
+@app.route('/projects/<project_id>/grids/<grid_model_id>/rebuild', methods=['POST'])
+def rebuild_grid_model(project_id, grid_model_id):
+    try:
+        model = grid_service.rebuild(project_id, grid_model_id)
+        return jsonify({"success": True, "grid_model_id": model["grid_model_id"], "grid_model": model, "quality": model["quality"]})
+    except Exception as e:
+        return grid_exception_response(e)
+
+
 @app.route('/upload-boreholes', methods=['POST'])
 def upload_boreholes():
     try:
@@ -304,38 +424,52 @@ def run():
     try:
         data = json_payload()
         project_id = require_project_from_json(data)
+        if any(key in data for key in ("top", "botm", "idomain", "grid_arrays")):
+            return api_error("top/botm/idomain 必须来自后端 Grid Store，运行请求不得覆盖权威数组", 400, "grid_authoritative_arrays")
+        grid_model_id = data.get("grid_model_id")
+        if not grid_model_id:
+            return api_error("运行模型必须提供 grid_model_id", 400, "grid_model_id_required")
         boundary = data.get('boundary')
         params = data.get('params')
         custom_boundaries = data.get('boundary_conditions', [])
-        wells = data.get('wells', [])
-        k_cells = data.get('k_cells', [])
         rch_data = data.get('rch_data', [])
         evt_data = data.get('evt_data', [])
         mp_start_cell = data.get('mp_start_cell')
         faults = data.get('faults', [])  # 获取断层数据
 
-        if not boundary:
-            return jsonify({"error": "Invalid boundary"}), 400
-
-        # 获取之前上传钻孔生成的的地质模型
-        try:
-            geo_model = geology_service.ensure_cache(project_id, GEO_MODELS)
-        except Exception:
-            return jsonify({"error": "请先上传钻孔数据构建地质模型"}), 400
+        manifest, arrays = grid_service.ensure_runnable(project_id, grid_model_id)
+        shape = (manifest["geometry"]["nlay"], manifest["geometry"]["nrow"], manifest["geometry"]["ncol"])
+        wells, well_warnings = normalize_cell_selection(data.get('wells', []), grid_model_id, shape, value_key="rate")
+        k_cells, k_warnings = normalize_cell_selection(data.get('k_cells', []), grid_model_id, shape, value_key="k_val")
+        if mp_start_cell:
+            mp_list, mp_warnings = normalize_cell_selection([mp_start_cell], grid_model_id, shape)
+            mp_start_cell = mp_list[0]
+        else:
+            mp_warnings = []
 
         # 调用引擎
         res_data, logs = run_simulation(
             params=params,
             boundary_coords=boundary,
             custom_boundaries=custom_boundaries,
-            geo_model=geo_model,
+            geo_model=None,
             wells=wells,
             k_cells=k_cells,
             rch_data=rch_data,
             evt_data=evt_data,
             mp_start_cell=mp_start_cell,
-            faults=faults  # 传递断层数据给引擎
+            faults=faults,  # 传递断层数据给引擎
+            grid_model={"manifest": manifest, "arrays": arrays},
         )
+        adapter_warnings = well_warnings + k_warnings + mp_warnings
+        if adapter_warnings:
+            logs = "\n".join(
+                [
+                    logs,
+                    "⚠️ Legacy cell selection adapter warnings:",
+                    *[f"- {item['code']}: {item['message']}" for item in adapter_warnings],
+                ]
+            )
 
         if res_data is None:
             return jsonify({"success": False, "error": "Simulation failed.", "logs": logs})
@@ -351,6 +485,8 @@ def run():
         print(f"Error in /run-model: {e}")
         if isinstance(e, (ProjectValidationError, ProjectNotFoundError)):
             return project_exception_response(e)
+        if isinstance(e, (GridModelValidationError, GridModelNotFoundError, GridArtifactError)):
+            return grid_exception_response(e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -359,38 +495,23 @@ def preview_geometry():
     try:
         data = json_payload()
         project_id = require_project_from_json(data)
-        boundary = data.get('boundary')
         params = data.get('params')
-        faults = data.get('faults', [])  # 获取断层数据
-
-        try:
-            geo_model = geology_service.ensure_cache(project_id, GEO_MODELS)
-        except Exception:
-            return jsonify({"error": "请先上传钻孔数据构建地质模型"}), 400
-
-        # 核心逻辑：如果此时前端还没画边界，自动根据钻孔外包络线计算一个默认边界
-        if not boundary or len(boundary) < 3:
-            xs = [bh['X'] for bh in geo_model.boreholes.values()]
-            ys = [bh['Y'] for bh in geo_model.boreholes.values()]
-            pad = float(params.get('x_val', 50)) * 2  # 向外扩充两个网格
-            boundary = [
-                {"x": min(xs) - pad, "y": min(ys) - pad},
-                {"x": max(xs) + pad, "y": min(ys) - pad},
-                {"x": max(xs) + pad, "y": max(ys) + pad},
-                {"x": min(xs) - pad, "y": max(ys) + pad}
-            ]
-
-        # 传递断层数据
-        points = get_grid_geometry(params, boundary, geo_model, faults)
-
+        model = grid_service.create(project_id, params or {})
+        render = grid_service.render_data(project_id, model["grid_model_id"])
+        geology_model = geology_service.get_active(project_id)
+        frontend_data = normalized_to_frontend(geology_model)
         return jsonify({
             "success": True,
-            "points": points,
-            "boundary_auto": boundary,  # 返回自动生成的边界
-            "boreholes": geo_model.get_frontend_data()['boreholes'],
-            "layer_mapping": geo_model.get_frontend_data()['layer_mapping']  # 带上钻孔以便3D渲染
+            "grid_model_id": model["grid_model_id"],
+            "grid_model": model,
+            "quality": model["quality"],
+            "points": render["points"],
+            "boreholes": frontend_data["boreholes"],
+            "layer_mapping": frontend_data["layer_mapping"]
         })
-    except (ProjectValidationError, ProjectNotFoundError) as e:
+    except (ProjectValidationError, ProjectNotFoundError, GridModelValidationError, GridModelNotFoundError, GridArtifactError) as e:
+        if isinstance(e, (GridModelValidationError, GridModelNotFoundError, GridArtifactError)):
+            return grid_exception_response(e)
         return project_exception_response(e)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

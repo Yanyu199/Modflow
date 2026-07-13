@@ -8,6 +8,7 @@ from project_schema import (
     ProjectValidationError,
     build_project_document,
     merge_project_update,
+    migrate_project_document,
     validate_project_document,
 )
 
@@ -71,7 +72,11 @@ class ProjectStore:
             raise ProjectNotFoundError("project not found")
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        return validate_project_document(data)
+        migrated, changed = migrate_project_document(data)
+        project = validate_project_document(migrated)
+        if changed:
+            self._atomic_write(path, project)
+        return project
 
     def update(self, project_id, patch):
         existing = self.get(project_id)

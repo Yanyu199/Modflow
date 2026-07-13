@@ -6,6 +6,7 @@ import pytest
 from project_schema import (
     ProjectValidationError,
     build_project_document,
+    migrate_project_document,
     validate_project_document,
 )
 
@@ -33,6 +34,7 @@ def valid_payload():
         },
         "references": {
             "geology_model_id": None,
+            "grid_model_id": None,
             "flow_model_id": None,
         },
         "metadata": {},
@@ -43,8 +45,9 @@ def test_build_minimal_legal_project():
     project = build_project_document(valid_payload())
 
     assert project["schema_name"] == "modflow_project"
-    assert project["schema_version"] == "1.0"
+    assert project["schema_version"] == "1.1"
     assert project["project_id"] == "project_alpha"
+    assert project["references"]["grid_model_id"] is None
     assert project["created_at"].endswith("+00:00")
     assert project["modified_at"].endswith("+00:00")
 
@@ -77,6 +80,21 @@ def test_unsupported_schema_version_is_rejected():
         validate_project_document(project)
 
     assert "unsupported schema_version" in str(exc.value)
+
+
+def test_schema_1_0_migrates_grid_reference():
+    project = build_project_document(valid_payload())
+    project["schema_version"] = "1.0"
+    project["references"].pop("grid_model_id")
+
+    migrated, changed = migrate_project_document(project)
+    validated = validate_project_document(project)
+
+    assert changed is True
+    assert migrated["schema_version"] == "1.1"
+    assert migrated["references"]["grid_model_id"] is None
+    assert validated["schema_version"] == "1.1"
+    assert validated["references"]["geology_model_id"] is None
 
 
 def test_illegal_unit_is_rejected():

@@ -85,7 +85,7 @@
 
 现象：
 
-- Project Schema v1.0 已建立，项目定义持久化到 `backend/projects/<project_id>/project.json`。
+- Project Schema v1.1 已建立，项目定义持久化到 `backend/projects/<project_id>/project.json`。
 - 正常流程不再隐式使用 `project_id='default'`，项目相关 API 要求显式 `project_id`。
 - `geology_model` schema v1.0 已建立，边界、钻孔、地层、断层、插值参数和 diagnostics 持久化到 `backend/projects/<project_id>/geology/geology_model.json`。
 - `GEO_MODELS` 仍是进程内全局字典，但只作为可从持久化 geology model 重建的缓存。
@@ -102,29 +102,50 @@
 - 增加插值输出 benchmark，验证重建结果和 artifact 一致。
 - 多进程/多用户前再引入数据库或共享缓存。
 
-## High
-
-### 前后端网格索引可能不一致
+### Flow Model schema 尚未建立
 
 现象：
 
-- 前端 `BoundaryMap.previewGrid()` 独立计算网格，并强制 `nrow/ncol >= 5`。
-- 后端 `generate_grid_info()` 没有相同的最小行列规则。
+- `Project`、`GeologyModel` 和 `GridModel` 已建立正式 schema。
+- `/run-model` 已强制使用 `grid_model_id` 和 Grid Store 中的 `top/botm/idomain`。
+- IC、NPF、CHD、WEL、RCH、EVT、RIV 等参数仍通过 legacy 请求体和前端 state 传入。
 
 风险：
 
-- 用户点选的井或 K 单元 row/col 可能落到后端不同单元。
+- 保存/打开项目后仍不能保证复现同一套 MF6 package 输入。
+- UI 字段到 FloPy package 字段缺少统一 schema 和写入测试。
 
 建议：
 
-- 网格只由后端生成，前端渲染后端返回的 grid/cell id。
-- 井、K、边界和结果均使用稳定 cell id。
+- 下一步建立 `flow_model_v1` 和最小 Model Checker。
+- 先覆盖稳定流 IC/NPF/CHD/WEL，再扩展 RIV/DRN/GHB/RCH/EVT。
+- 每个 package 都要有 schema、API、序列化、FloPy 写入和基准测试。
+
+## High
+
+### Flow 业务选择仍未完全迁移到正式 cell_id/schema
+
+现象：
+
+- 后端 `grid_model` v1.0 已提供稳定 `cell_id`，前端井/K 点选已优先使用后端 `cell_id`。
+- `BoundaryMap.previewGrid()` 仍作为旧 fallback 存在，但正常生成网格入口已调用 Grid API。
+- 边界线段配置、RCH/EVT、正式 Flow package 参数还没有统一迁移到 `flow_model_v1`。
+
+风险：
+
+- 旧项目或边界/source-sink 配置仍可能携带 row/col 或几何片段，而不是可校验的 cell reference。
+- 重建 Grid Model 后，旧 cell_id 引用会失效，需要正式迁移/清理策略。
+
+建议：
+
+- 建立 `flow_model_v1` 后，把井、K、CHD/RIV/DRN/GHB/RCH/EVT 全部迁移到明确 cell/geometry reference。
+- 对重建 grid 后的旧引用提供 Model Checker 提示和批量清理。
 
 ### CRS 和单位缺失
 
 现象：
 
-- Project Schema v1.0 已要求 CRS、水平长度、垂直长度、时间和流量单位。
+- Project Schema v1.1 已要求 CRS、水平长度、垂直长度、时间和流量单位。
 - Shapefile CRS 未保存或校验。
 - DIS 写 `METERS`，TDIS 写 `DAYS`，当前 schema 只接受 `m/day/m3/day`，不做转换。
 - WEL、RCH、EVT UI 文案有单位，但 API 没有验证。
@@ -160,9 +181,9 @@
 
 现象：
 
-- 所有层共用同一个 `active_2d`。
-- 层厚最小值在插值阶段被强制至少 0.1。
-- 尖灭层没有转为 inactive cell。
+- Grid Model 已保存分层 `idomain`，并按 `minimum_thickness` 将薄层单元 deactivate。
+- 质量报告会阻塞负厚度和地层面交叉。
+- 地质插值阶段仍有最小厚度/层序处理策略，尚缺更多人工地质基准。
 
 风险：
 
@@ -173,14 +194,16 @@
 
 - 定义最小厚度规则和 inactive 规则。
 - 将地质尖灭处理写入 DIS/idomain 测试。
+- 增加含尖灭、断层台阶和多钻孔控制面的标准 geology/grid benchmark。
 
 ### 项目保存/打开不是正式持久化
 
 现象：
 
-- 正式项目定义已使用 `modflow_project` schema v1.0。
+- 正式项目定义已使用 `modflow_project` schema v1.1，正式引用 active `grid_model_id`。
 - 前端下载的项目包为 `modflow_project_bundle`，新格式包含 `project`、`geology_model` 和当前流场 UI state。
 - 地质体已有正式 schema 和后端持久化。
+- Grid Model 已有正式 schema、manifest、`.npz` artifact 和 checksum。
 - 流场配置和运行历史还没有各自的正式 schema。
 
 风险：

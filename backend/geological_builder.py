@@ -75,7 +75,7 @@ class GeologicalModeler:
             return 0
 
     def interpolate_surfaces(self, grid_x, grid_y, faults=None):
-        print(f"\n--- 🌊 地质插值引擎启动 ---")
+        print("\n--- Geological interpolation started ---")
         blocks = []
         min_x, max_x = np.nanmin(grid_x), np.nanmax(grid_x)
         min_y, max_y = np.nanmin(grid_y), np.nanmax(grid_y)
@@ -114,7 +114,7 @@ class GeologicalModeler:
                 current_polys = new_polys
 
             blocks = current_polys
-            print(f"✅ 断层切割成功: {len(faults)} 条断层将研究区切成了 {len(blocks)} 个物理断块！")
+            print(f"Fault partition succeeded: {len(faults)} faults split the domain into {len(blocks)} blocks.")
         else:
             blocks = [domain_box]
 

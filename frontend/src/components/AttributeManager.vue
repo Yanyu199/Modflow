@@ -29,6 +29,7 @@
           <span style="font-weight:bold; color:#606266">
             R{{ scope.row.row }}, C{{ scope.row.col }}
           </span>
+          <div v-if="scope.row.cell_id" class="cell-id-mini">{{ scope.row.cell_id }}</div>
         </template>
       </el-table-column>
 
@@ -104,14 +105,14 @@ export default {
       this.wells.forEach((w, index) => {
         list.push({
           id: `w-${w.row}-${w.col}`,
-          row: w.row, col: w.col, type: 'well', dataRef: w
+          row: w.row, col: w.col, column: w.column, layer: w.layer, cell_id: w.cell_id, grid_model_id: w.grid_model_id, type: 'well', dataRef: w
         });
       });
       // 收集K网格
       this.kCells.forEach((k, index) => {
         list.push({
           id: `k-${k.row}-${k.col}`,
-          row: k.row, col: k.col, type: 'k_cell', dataRef: k
+          row: k.row, col: k.col, column: k.column, layer: k.layer, cell_id: k.cell_id, grid_model_id: k.grid_model_id, type: 'k_cell', dataRef: k
         });
       });
       // 按行列排序，方便查看
@@ -121,12 +122,24 @@ export default {
   methods: {
     onDelete(row) {
       this.$emit('delete-attribute', { 
-        type: row.type, row: row.row, col: row.col 
+        type: row.type,
+        row: row.row,
+        col: row.col,
+        column: row.column,
+        layer: row.layer,
+        cell_id: row.cell_id,
+        grid_model_id: row.grid_model_id
       });
     },
     onTypeChange(newType, row) {
       this.$emit('type-change', {
-        row: row.row, col: row.col, newType: newType
+        row: row.row,
+        col: row.col,
+        column: row.column,
+        layer: row.layer,
+        cell_id: row.cell_id,
+        grid_model_id: row.grid_model_id,
+        newType: newType
       });
     }
   }
@@ -141,6 +154,14 @@ export default {
 h3 { margin: 0; font-size: 14px; color: #303133; }
 .empty-tip { font-size: 12px; color: #999; text-align: center; padding: 20px 0; }
 .clear-btn { color: #F56C6C; padding: 0; }
+.cell-id-mini {
+  color: #909399;
+  font-size: 10px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 </style>
 <style>
 .el-table .cell {

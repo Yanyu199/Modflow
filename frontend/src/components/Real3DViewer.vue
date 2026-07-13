@@ -50,6 +50,7 @@
 <script>
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import axios from 'axios';
 
 import ViewerTopBar from './ViewerTopBar.vue';
 import LayerVisibilityPanel from './LayerVisibilityPanel.vue';
@@ -78,7 +79,9 @@ export default {
     rchData: { type: Array, default: () => [] },
     evtData: { type: Array, default: () => [] },
     showRchContour: { type: Boolean, default: false },
-    showEvtContour: { type: Boolean, default: false }
+    showEvtContour: { type: Boolean, default: false },
+    projectId: { type: String, default: null },
+    gridModelId: { type: String, default: null }
   },
   data() {
     return {
@@ -530,9 +533,32 @@ export default {
       this.updateVisibility(); 
     },
 
+    async selectGridCell(cellData) {
+      if (!cellData) return;
+      if (!this.projectId || !this.gridModelId || !cellData.cell_id) {
+        this.selectedCell = cellData;
+        return;
+      }
+      try {
+        const response = await axios.get(
+          `http://localhost:5000/projects/${this.projectId}/grids/${this.gridModelId}/cells/${encodeURIComponent(cellData.cell_id)}`
+        );
+        const detail = response.data.cell || {};
+        this.selectedCell = {
+          ...detail,
+          head: cellData.head !== undefined ? cellData.head : detail.head,
+          flows: cellData.flows || detail.flows,
+          rch_value: cellData.rch_value,
+          evt_value: cellData.evt_value
+        };
+      } catch (err) {
+        this.selectedCell = cellData;
+      }
+    },
+
     setupClickHandler() {
       const container = this.$refs.container;
-      this.clickHandler = (event) => {
+      this.clickHandler = async (event) => {
         const rect = container.getBoundingClientRect();
         this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
         this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -581,7 +607,7 @@ export default {
                        this.selectedCell = null; // 隐藏默认的大水量面板
                    } else {
                        // 正常模式，弹出六面水量框
-                       this.selectedCell = cellData; 
+                       await this.selectGridCell(cellData);
                        this.selectedSurfaceData = null;
                    }
                }

@@ -1,17 +1,17 @@
 # Project Schema
 
-更新日期：2026-07-12
+更新日期：2026-07-13
 
 ## 目标
 
-`project_v1` 是当前平台的第一个正式项目定义。它只保存项目上下文和最小引用信息，不保存 UI 折叠状态、当前标签页、服务器绝对路径或运行产物路径。地质体模型已建立独立 `geology_model` schema v1.0；流场模型和运行记录后续仍需要各自建立独立 schema。
+`modflow_project` 是当前平台的正式项目上下文定义。它只保存项目 CRS、单位、模型类型和最小 active model 引用，不保存 UI 折叠状态、当前标签页、服务器绝对路径或运行产物路径。当前已建立独立 `geology_model` schema v1.0 和 `grid_model` schema v1.0；流场模型和运行记录后续仍需要各自建立独立 schema。
 
 ## Schema
 
 ```json
 {
   "schema_name": "modflow_project",
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "project_id": "prj_0123456789abcdef",
   "name": "Demo groundwater project",
   "description": "",
@@ -35,6 +35,7 @@
   },
   "references": {
     "geology_model_id": null,
+    "grid_model_id": null,
     "flow_model_id": null
   },
   "metadata": {}
@@ -44,7 +45,8 @@
 ## 字段规则
 
 - `schema_name` 固定为 `modflow_project`。
-- `schema_version` 当前只支持 `1.0`。未知版本拒绝。
+- `schema_version` 当前支持 `1.1`，并兼容读取 `1.0`。
+- `1.0` 项目读取时会显式迁移为 `1.1`，补充 `references.grid_model_id = null` 并原子写回。
 - `project_id` 由后端生成或严格校验，允许字母、数字、下划线和连字符，长度 3-64；`default`、`.`、`..` 被保留。
 - `created_at` 和 `modified_at` 必须是带时区的 ISO 8601 时间。
 - JSON 不允许 `NaN`、`Infinity`、NumPy 类型、Path 对象或其他非 JSON 类型。
@@ -87,7 +89,7 @@
   "success": true,
   "project": {
     "schema_name": "modflow_project",
-    "schema_version": "1.0",
+    "schema_version": "1.1",
     "project_id": "prj_0123456789abcdef"
   }
 }
@@ -126,12 +128,12 @@ backend/projects/<project_id>/project.json
 1. 前端第一次进入时打开“创建工程”对话框。
 2. 后端创建项目并返回 `project_id`。
 3. Vue 根组件保存唯一 `currentProject`，子组件只接收 `projectId` prop。
-4. 边界、钻孔、断层、网格预览、地质模型恢复、源汇项上传和 `/run-model` 都必须显式携带 `project_id`。
+4. 边界、钻孔、断层、Grid Model 创建、地质模型恢复、源汇项上传和 `/run-model` 都必须显式携带 `project_id`。
 5. 缺少 `project_id` 或传入 `default` 会返回验证错误。
 
 ## Legacy 兼容
 
-- 新项目导出使用 `bundle_schema="modflow_project_bundle"` 和 `bundle_version="1.0"`，内部包含 `project`、`geology_model` 和必要的前端流场 `state`。
+- 新项目导出使用 `bundle_schema="modflow_project_bundle"` 和 `bundle_version="1.0"`，内部包含 `project`、`geology_model` 和必要的前端流场 `state`；Grid Model 的权威 manifest/artifact 保存在后端项目目录，不直接嵌入前端下载包。
 - 旧 JSON 不会自动归入 `default`。
 - 导入旧 JSON 时，如果当前没有工程，前端要求用户先创建工程并补充 CRS/单位。
 - 如果已有当前工程，旧 JSON 只能导入到当前工程上下文，且会提示不会自动猜测 CRS 或单位。
@@ -140,6 +142,7 @@ backend/projects/<project_id>/project.json
 ## 当前限制
 
 - `GEO_MODELS` 仍是进程内派生缓存，只按 `project_id` 隔离；权威地质数据已持久化到 `backend/projects/<project_id>/geology/geology_model.json`。
-- 地质体模型已有后端 `geology_model` schema v1.0，但派生地层面数组仍采用可重建策略，尚未保存为 `.npz` 等 artifact。
+- 地质体模型已有后端 `geology_model` schema v1.0，但派生地层面数组仍采用可重建策略，尚未保存为 geology `.npz` artifact。
+- Grid Model 已有后端 `grid_model` schema v1.0，并保存 `grid_model.json` 和 `grid_arrays.npz`。
 - 水动力模型配置、运行历史和 run manifest 仍未持久化到项目目录。
 - Shapefile 文件本身还没有托管到项目目录，本轮只对上传请求做项目校验。

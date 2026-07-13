@@ -38,10 +38,10 @@
 功能范围：
 
 - 单应力期稳定流。
-- 结构化 DIS 网格。
+- 结构化 DIS 网格。首版 `grid_model` v1.0 已完成，后端保存 manifest/artifact 并提供稳定 `cell_id`。
 - NPF、IC、CHD、WEL。
 - 水头结果和全模型水量平衡。
-- 前后端共用后端返回的网格定义，不再让前端独立计算 row/col。
+- 前后端共用后端返回的 Grid Model，不再让前端独立计算权威 row/col。
 
 前置条件：
 
@@ -52,7 +52,7 @@
 
 - UI 配置的 CHD/WEL/K 能在生成的 MF6 package 文件中逐项核对。
 - 运行结果包含 convergence status、listing 摘要、package budget、percent discrepancy。
-- row/col/layer 从前端点击到后端 DIS 完全一致。
+- row/col/layer 从前端点击到后端 DIS 完全一致，且通过稳定 `cell_id` 传递。
 - 保存项目并重新打开后，生成的 MF6 输入文件与原运行一致或差异有明确迁移说明。
 
 数值基准：
@@ -73,7 +73,8 @@
 
 - `Project` schema v1.0 已完成。
 - `GeologyModel` schema v1.0 已完成基础版，覆盖边界、钻孔、地层、断层、插值参数、diagnostics、持久化和缓存重建。
-- 后续继续定义 `Grid`、`FlowPackageConfig`、`Run` 数据结构。
+- `GridModel` schema v1.0 已完成基础版，覆盖结构化 DIS、top/botm/idomain、cell_id、quality report、artifact checksum、stale 和 API。
+- 后续继续定义 `FlowPackageConfig`、`Run` 数据结构。
 - 输入验证：文件、字段、单位、坐标、层序、参数范围。
 - 项目保存/打开已包含正式 project schema 和 geology model schema；流场 state 仍需迁移到正式 schema。
 - 后端项目定义和地质标准数据不依赖 Flask 全局状态；`GEO_MODELS[project_id]` 只作为可重建缓存。
@@ -87,7 +88,7 @@
 - 项目 JSON 有 schema version。已完成 `modflow_project` v1.0 和 `geology_model` v1.0。
 - 打开旧项目时有兼容路径或明确报错。
 - API 对错误字段返回结构化错误。
-- 单元测试覆盖 geology schema、边界、钻孔/地层、断层、API、持久化隔离和缓存重建；K/WEL/CHD 配置仍在后续 flow schema 中扩展。
+- 单元测试覆盖 project/geology/grid schema、边界、钻孔/地层、断层、Grid API、持久化隔离、checksum、stale、cell_id 和缓存重建；K/WEL/CHD 配置仍在后续 flow schema 中扩展。
 
 数值基准：
 
@@ -251,10 +252,10 @@
 
 ## 推荐的下一个开发任务
 
-建议下一个开发任务是：建立后端唯一网格定义、稳定 `cell_id` 和地质网格质量检查。
+建议下一个开发任务是：建立 `flow_model_v1` 和最小 Model Checker，先覆盖稳定流 IC/NPF/CHD/WEL。
 
 原因：
 
-- 它承接本轮 `geology_model` schema。
-- 它能消除前端和后端各自计算 row/col 的风险。
-- 它是后续 Flow Model Schema、package 写入测试和保存/打开复现 MF6 输入文件的前置条件。
+- 它承接当前 `project/geology/grid` 三个 schema。
+- 它能把当前 `/run-model` legacy adapter 中的 IC/NPF/CHD/WEL 参数正式持久化。
+- 它是 package 写入测试、水量平衡验收和保存/打开复现 MF6 输入文件的前置条件。

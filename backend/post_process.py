@@ -2,6 +2,7 @@
 import os
 import numpy as np
 import flopy
+from grid_model_schema import cell_id
 
 
 def process_results(work_dir, nlay, nrow, ncol, idomain, top_arrays, bot_arrays, grid_info):
@@ -47,6 +48,10 @@ def process_results(work_dir, nlay, nrow, ncol, idomain, top_arrays, bot_arrays,
 
     origin_x, origin_y = grid_info['origin_x'], grid_info['origin_y']
     delr, delc = grid_info['delr'], grid_info['delc']
+    delr_arr = np.asarray(delr, dtype=float) if np.ndim(delr) else np.full(ncol, float(delr))
+    delc_arr = np.asarray(delc, dtype=float) if np.ndim(delc) else np.full(nrow, float(delc))
+    x_centers = grid_info.get("x_centers")
+    y_centers = grid_info.get("y_centers")
     points = []
 
     for k in range(nlay):
@@ -61,14 +66,22 @@ def process_results(work_dir, nlay, nrow, ncol, idomain, top_arrays, bot_arrays,
                     vx, vy, vz = flow_map.get((k, i, j), (0.0, 0.0, 0.0))
 
                     # ⭐ 计算三个方向真实的物理过水截面积 (m²)
-                    area_x = delc * thick  # 东西向侧面面积
-                    area_y = delr * thick  # 南北向侧面面积
-                    area_z = delr * delc  # 顶底面面积
+                    area_x = delc_arr[i] * thick  # 东西向侧面面积
+                    area_y = delr_arr[j] * thick  # 南北向侧面面积
+                    area_z = delr_arr[j] * delc_arr[i]  # 顶底面面积
+                    if x_centers is not None and y_centers is not None:
+                        x_val = float(x_centers[i, j])
+                        y_val = float(y_centers[i, j])
+                    else:
+                        x_val = origin_x + float(np.sum(delr_arr[:j])) + delr_arr[j] / 2
+                        y_val = origin_y + float(np.sum(delc_arr)) - float(np.sum(delc_arr[:i])) - delc_arr[i] / 2
 
                     # 组装 6 个面的通量，规则：正数代表水离开当前网格，负数代表水进入当前网格
                     points.append({
-                        "x": origin_x + j * delr + delr / 2,
-                        "y": origin_y + (nrow - 1 - i) * delc + delc / 2,
+                        "cell_id": cell_id(grid_info["grid_model_id"], k, i, j) if grid_info.get("grid_model_id") else None,
+                        "grid_model_id": grid_info.get("grid_model_id"),
+                        "x": x_val,
+                        "y": y_val,
                         "layer": k,
                         "row": i,
                         "col": j,
