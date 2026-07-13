@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-import signal
 import subprocess
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -43,6 +43,7 @@ from run_manifest_schema import (
     STATUS_FAILED_INPUT_WRITE,
     STATUS_FAILED_OUTPUTS,
     STATUS_FAILED_POSTPROCESSING,
+    STATUS_FAILED_RESOURCE_LIMIT,
     STATUS_FAILED_VALIDATION,
     STATUS_INTERRUPTED,
     STATUS_POSTPROCESSING,
@@ -55,7 +56,9 @@ from run_manifest_schema import (
     utc_now_iso,
     run_summary,
 )
+from process_control import process_group_id, process_identity, terminate_process_tree
 from run_manifest_store import RunManifestNotFoundError, RunManifestStore
+from resource_controller import ResourceController, ResourceLimitExceeded
 from resource_guard import ResourceLimitError, enforce_run_preflight
 from runtime_config import DEFAULT_RUNTIME_CONFIG, RuntimeConfig
 
@@ -99,6 +102,7 @@ class RunService:
             **(manifest.get("executor") or {}),
             "type": "local_process",
             "idempotency_key": idempotency_key,
+            "run_token": uuid.uuid4().hex,
             "timeout_seconds": self.config.run_timeout_seconds,
             "resource_estimate": estimate,
         }
@@ -216,6 +220,7 @@ class RunService:
             manifest = self.run_store.transition(manifest, STATUS_RUNNING)
             execution = self._execute_mf6(resolution.path, input_dir, logs_dir, manifest=manifest)
             mf6_stdout = execution["stdout_lines"]
+            manifest = self.run_store.load(project_id, run_id)
             manifest = self._update_manifest(
                 manifest,
                 mf6={
@@ -370,8 +375,7 @@ class RunService:
     def _fail(self, manifest, status, code, message, details=None):
         try:
             latest = self.run_store.load(manifest["project_id"], manifest["run_id"])
-            if latest.get("status") != manifest.get("status"):
-                manifest = latest
+            manifest = latest
         except Exception:
             pass
         if manifest.get("status") != status:
@@ -406,6 +410,7 @@ class RunService:
         }
 
     def _execute_mf6(self, executable, input_dir: Path, logs_dir: Path, *, manifest):
+        logs_dir.mkdir(parents=True, exist_ok=True)
         try:
             process = subprocess.Popen(
                 [str(executable)],
@@ -419,26 +424,77 @@ class RunService:
             )
         except FileNotFoundError as exc:
             raise RunFailure(STATUS_FAILED_EXECUTABLE, "RUN_MF6_START_FAILED", str(exc))
+        pgid = process_group_id(process.pid)
         manifest.setdefault("executor", {})["mf6_pid"] = int(process.pid)
+        manifest["executor"]["mf6_identity"] = process_identity(process.pid)
+        manifest["executor"]["process_group_id"] = pgid
         manifest = self.run_store.save(manifest)
         started = time.time()
         timeout = int((manifest.get("executor") or {}).get("timeout_seconds") or self.config.run_timeout_seconds)
+        resource_controller = ResourceController(self.config)
         while process.poll() is None:
+            try:
+                resource_controller.sample(process.pid, process_group_id=pgid, reason_prefix="mf6")
+            except ResourceLimitExceeded as exc:
+                stdout, stderr = self._communicate_or_collect(process)
+                (logs_dir / "mf6_stdout.txt").write_text(stdout or "", encoding="utf-8")
+                (logs_dir / "mf6_stderr.txt").write_text(stderr or "", encoding="utf-8")
+                manifest = self._update_manifest(
+                    manifest,
+                    resource_usage=exc.usage,
+                    executor={
+                        **manifest["executor"],
+                        "termination": exc.termination,
+                        "run_duration_seconds": time.time() - started,
+                    },
+                )
+                raise RunFailure(STATUS_FAILED_RESOURCE_LIMIT, exc.code, exc.message, exc.usage)
             try:
                 latest = self.run_store.load(manifest["project_id"], manifest["run_id"])
             except Exception:
                 latest = manifest
             if latest.get("status") == STATUS_CANCEL_REQUESTED:
-                self._terminate_process_tree(process.pid)
-                stdout, stderr = process.communicate(timeout=5)
+                cancel_started = time.time()
+                termination = terminate_process_tree(
+                    process.pid,
+                    process_group=pgid,
+                    grace_seconds=self.config.cancel_grace_seconds,
+                    reason="cancel_requested",
+                )
+                stdout, stderr = self._communicate_or_collect(process)
                 (logs_dir / "mf6_stdout.txt").write_text(stdout or "", encoding="utf-8")
                 (logs_dir / "mf6_stderr.txt").write_text(stderr or "", encoding="utf-8")
+                manifest = self._update_manifest(
+                    latest,
+                    resource_usage=resource_controller.usage(),
+                    executor={
+                        **(latest.get("executor") or manifest["executor"]),
+                        "termination": termination,
+                        "cancel_duration_seconds": time.time() - cancel_started,
+                        "run_duration_seconds": time.time() - started,
+                    },
+                )
                 raise RunFailure(STATUS_CANCELLED, "RUN_CANCELLED", "Run was cancelled by request.")
             if timeout > 0 and time.time() - started > timeout:
-                self._terminate_process_tree(process.pid)
-                stdout, stderr = process.communicate(timeout=5)
+                termination = terminate_process_tree(
+                    process.pid,
+                    process_group=pgid,
+                    grace_seconds=self.config.process_termination_grace_seconds,
+                    reason="timeout",
+                )
+                stdout, stderr = self._communicate_or_collect(process)
                 (logs_dir / "mf6_stdout.txt").write_text(stdout or "", encoding="utf-8")
                 (logs_dir / "mf6_stderr.txt").write_text(stderr or "", encoding="utf-8")
+                manifest = self._update_manifest(
+                    latest,
+                    resource_usage=resource_controller.usage(timeout_seconds=timeout),
+                    executor={
+                        **(latest.get("executor") or manifest["executor"]),
+                        "termination": termination,
+                        "timed_out_at": utc_now_iso(),
+                        "run_duration_seconds": time.time() - started,
+                    },
+                )
                 raise RunFailure(STATUS_TIMED_OUT, "RUN_TIMED_OUT", f"Run exceeded timeout of {timeout} seconds.")
             time.sleep(0.2)
         stdout, stderr = process.communicate()
@@ -446,23 +502,27 @@ class RunService:
         stderr = stderr or ""
         (logs_dir / "mf6_stdout.txt").write_text(stdout, encoding="utf-8")
         (logs_dir / "mf6_stderr.txt").write_text(stderr, encoding="utf-8")
+        manifest = self.run_store.load(manifest["project_id"], manifest["run_id"])
+        self._update_manifest(
+            manifest,
+            resource_usage=resource_controller.usage(),
+            executor={**manifest["executor"], "run_duration_seconds": time.time() - started},
+        )
         return {
             "return_code": int(process.returncode),
             "stdout_lines": stdout.splitlines(),
             "stderr_lines": stderr.splitlines(),
         }
 
-    def _terminate_process_tree(self, pid):
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True)
-            return
+    def _communicate_or_collect(self, process):
         try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            return process.communicate(timeout=5)
         except Exception:
             try:
-                os.kill(pid, signal.SIGTERM)
+                process.kill()
+                return process.communicate(timeout=2)
             except Exception:
-                return
+                return "", ""
 
     def _raise_if_cancel_requested(self, manifest):
         try:

@@ -37,3 +37,17 @@ Environment from this run:
   1,000,000-cell MF6 solve performance.
 - Existing numerical MF6 coverage remains the small steady-flow and RIV
   benchmarks in pytest.
+
+## Real MF6 Scale Command
+
+Use the separate real MF6 benchmark for solve performance:
+
+```bash
+cd backend
+python mf6_scale_benchmark.py --case small
+```
+
+`small`, `medium`, and `large` cases build project/grid/flow data through the
+same backend services and submit through `LocalProcessRunExecutor`. Reports
+include cells, elapsed time, MF6 duration, resource usage, output file sizes,
+convergence, and water budget summaries.

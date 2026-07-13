@@ -36,6 +36,11 @@ Environment variables and defaults:
 | `FLOPY_MAX_RENDER_CELLS` | 200000 | Frontend render guidance |
 | `FLOPY_MAX_PROCESS_MEMORY_BYTES` | 2147483648 | Preflight process memory estimate |
 | `FLOPY_RESULT_JSON_CELL_LIMIT` | 50000 | Max cells for JSON result slices |
+| `FLOPY_EXECUTOR_MODE` | embedded | `embedded` for development API scheduling, otherwise queue-only API |
+| `FLOPY_SCHEDULER_LEASE_SECONDS` | 120 | SQLite claim lease duration |
+| `FLOPY_CANCEL_GRACE_SECONDS` | 5 | Grace period before force-killing cancelled process trees |
+| `FLOPY_MAX_PROCESS_CPU_SECONDS` | 0 | Optional CPU seconds limit; 0 disables it |
+| `FLOPY_RESULT_CACHE_ENABLED` | true | Enable per-process result slice cache |
 
 ## Scale Classes
 
@@ -52,5 +57,17 @@ Environment variables and defaults:
   not the target scalable workflow.
 - Result viewer currently loads the default head layer slice after completion;
   multi-layer/time UI controls are still a follow-up.
-- Resource checks are preflight estimates, not OS-level cgroup limits.
+- Resource checks now include psutil process-tree monitoring and termination,
+  but they are still not kernel cgroup/Job Object hard limits.
 - GPU is optional and limited to array pre/post-processing abstraction.
+
+## Automated Stability Verification
+
+The current test suite verifies real parent/child process-tree termination,
+MF6 timeout termination through `RunService._execute_mf6()`, SQLite single-winner
+claim behavior, psutil memory-limit termination, and ResultService cache
+hit/miss/eviction metrics.
+
+Recovery behavior is intentionally conservative: live matching worker/MF6
+processes are terminated and the run becomes terminal. The executor does not
+reattach to continue a half-running solve.

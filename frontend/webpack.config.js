@@ -2,15 +2,18 @@
 const path = require('path');
 const webpack = require('webpack');
 const { VueLoaderPlugin } = require('vue-loader');
+const isProduction = process.env.NODE_ENV === 'production';
 
 module.exports = {
-  mode: 'development',
+  mode: isProduction ? 'production' : 'development',
   entry: './src/main.js',
   output: {
     path: path.resolve(__dirname, 'dist'),
     filename: 'main.js',
+    chunkFilename: 'chunks/[name].[contenthash:8].js',
     publicPath: '/'
   },
+  devtool: isProduction ? false : 'eval-cheap-module-source-map',
   module: {
     rules: [
       {
@@ -44,6 +47,11 @@ module.exports = {
       'process.env.FLOPY_API_BASE_URL': JSON.stringify(process.env.FLOPY_API_BASE_URL || '')
     })
   ],
+  performance: {
+    hints: isProduction ? 'warning' : false,
+    maxAssetSize: 4 * 1024 * 1024,
+    maxEntrypointSize: 4 * 1024 * 1024
+  },
   resolve: {
     alias: {
       'vue$': 'vue/dist/vue.esm.js'

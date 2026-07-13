@@ -365,13 +365,13 @@
 </template>
 
 <script>
-import BoundaryMap from './components/BoundaryMap.vue';
 import Result3DViewer from './components/Real3DViewer.vue';
-import ModelParametersPanel from './components/ModelParametersPanel.vue';
-import LayerPanel from './components/LayerPanel.vue';
-import GridSettings from './components/GridSettings.vue';
-import AnalysisPanel from './components/AnalysisPanel.vue';
-import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
+const BoundaryMap = () => import(/* webpackChunkName: "geology-view" */ './components/BoundaryMap.vue');
+const ModelParametersPanel = () => import(/* webpackChunkName: "flow-view" */ './components/ModelParametersPanel.vue');
+const LayerPanel = () => import(/* webpackChunkName: "geology-view" */ './components/LayerPanel.vue');
+const GridSettings = () => import(/* webpackChunkName: "geology-view" */ './components/GridSettings.vue');
+const AnalysisPanel = () => import(/* webpackChunkName: "analysis-view" */ './components/AnalysisPanel.vue');
+const ProjectSettingsDialog = () => import(/* webpackChunkName: "project-dialog" */ './components/ProjectSettingsDialog.vue');
 import { createProject, updateProject } from './api/projects';
 import { uploadBoreholes, validateGeologyModel, createGeologyModel } from './api/geologyModels';
 import { createGrid, getGridRenderData } from './api/grids';

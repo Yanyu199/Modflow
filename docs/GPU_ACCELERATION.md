@@ -42,3 +42,30 @@ or switch to layer mode; they must not block MODFLOW computation.
 
 CPU path tests always run. GPU-specific availability is optional and may fall
 back to NumPy with an explicit warning.
+
+## Benchmark
+
+Run:
+
+```bash
+cd backend
+python gpu_benchmark.py --sizes-mb 10 100
+```
+
+The benchmark compares CPU and optional CuPy paths for finite min/max, masks,
+thickness, slice normalization, and color-range statistics. It reports CPU time,
+GPU init, host-to-device, kernel, device-to-host, total GPU time, memory-pool
+usage, fallback reason, and maximum absolute error.
+
+GPU remains default-off. Arrays below `FLOPY_GPU_MIN_ARRAY_BYTES` remain on CPU,
+and GPU errors or OOM fall back to CPU without changing MF6 solve behavior.
+
+## Local Verification On 2026-07-13
+
+- 10 MB array: CPU 0.03763 s; GPU path skipped because the array is below the
+  100 MB threshold.
+- 100 MB array: CPU 0.32079 s; CuPy was importable, but CUDA runtime dependency
+  `nvrtc64_112_0.dll` was unavailable, so the benchmark fell back to CPU.
+- maximum absolute error after fallback: 0.0.
+
+No GPU speedup is claimed on this machine. The interface remains default-off.

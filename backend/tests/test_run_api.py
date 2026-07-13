@@ -57,7 +57,7 @@ def test_run_api_creates_persistent_manifest_and_budget_report(tmp_path, monkeyp
 
     manifest = wait_for_run(client, project["project_id"], run_id)
     assert manifest["schema_name"] == "run_manifest"
-    assert manifest["schema_version"] == "1.1"
+    assert manifest["schema_version"] == "1.2"
     assert manifest["status"] in {"completed", "completed_with_warnings"}
     assert manifest["model_snapshot"]["project_checksum"]
     assert manifest["model_snapshot"]["grid_checksum"]
@@ -158,4 +158,17 @@ def test_run_api_rejects_invalid_run_id_without_path_leak(tmp_path, monkeypatch)
 
     assert response.status_code == 400
     assert response.get_json()["code"] == "run_validation_error"
+    assert str(tmp_path) not in response.get_data(as_text=True)
+
+
+def test_runtime_status_is_read_only_and_does_not_leak_paths(tmp_path, monkeypatch):
+    client, _store = client_with_store(tmp_path, monkeypatch)
+
+    response = client.get("/system/runtime-status")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["success"] is True
+    assert "executor" in body
+    assert "result_cache" in body
     assert str(tmp_path) not in response.get_data(as_text=True)

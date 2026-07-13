@@ -4,8 +4,8 @@ Updated: 2026-07-13
 
 ## 2026-07-13 Async Runtime Update
 
-Current schema version is `1.1`. Version `1.0` manifests are migrated by adding
-an `executor` object. New statuses are:
+Current schema version is `1.2`. Version `1.0` and `1.1` manifests are migrated
+by adding the expanded `executor` object and `resource_usage`. New statuses are:
 
 - `queued`
 - `starting`
@@ -13,10 +13,15 @@ an `executor` object. New statuses are:
 - `cancelled`
 - `timed_out`
 - `interrupted`
+- `interrupted_with_live_process`
+- `failed_cancel`
+- `failed_resource_limit`
 
-The `executor` object records local executor type, idempotency key, worker PID,
-MF6 PID, timeout seconds, cancellation metadata, and resource estimates. Formal
-run creation now returns `202` and does not wait for MF6 to finish.
+The `executor` object records local executor type, idempotency key, scheduler
+owner/lease, worker PID and identity, MF6 PID and identity, process group id,
+timeout seconds, termination reports, cancellation metadata, and resource
+estimates. `resource_usage` records sampled process-tree RSS and CPU peaks.
+Formal run creation returns `202` and does not wait for MF6 to finish.
 
 ## 2026-07-13 RIV Budget Update
 
@@ -84,6 +89,7 @@ Allowed states:
 - `failed_executable`
 - `failed_input_write`
 - `failed_execution`
+- `failed_resource_limit`
 - `failed_convergence`
 - `failed_outputs`
 - `failed_budget`
@@ -100,6 +106,7 @@ Failure statuses map to stable error-code families:
 | `failed_executable` | `RUN_EXECUTABLE_FAILED` |
 | `failed_input_write` | `RUN_INPUT_WRITE_FAILED` |
 | `failed_execution` | `RUN_EXECUTION_FAILED` |
+| `failed_resource_limit` | `RUN_RESOURCE_LIMIT_EXCEEDED` |
 | `failed_convergence` | `RUN_CONVERGENCE_FAILED` |
 | `failed_outputs` | `RUN_OUTPUTS_FAILED` |
 | `failed_budget` | `RUN_BUDGET_FAILED` |

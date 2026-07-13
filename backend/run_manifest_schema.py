@@ -16,7 +16,7 @@ except Exception:  # pragma: no cover - numpy is part of the backend deps.
 
 
 SCHEMA_NAME = "run_manifest"
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 RUN_ID_PATTERN = re.compile(r"^run_[0-9a-f]{16,32}$")
 
 STATUS_CREATED = "created"
@@ -33,11 +33,14 @@ STATUS_COMPLETED_WITH_WARNINGS = "completed_with_warnings"
 STATUS_CANCELLED = "cancelled"
 STATUS_TIMED_OUT = "timed_out"
 STATUS_INTERRUPTED = "interrupted"
+STATUS_INTERRUPTED_WITH_LIVE_PROCESS = "interrupted_with_live_process"
+STATUS_FAILED_CANCEL = "failed_cancel"
 STATUS_FAILED_VALIDATION = "failed_validation"
 STATUS_FAILED_COMPILE = "failed_compile"
 STATUS_FAILED_EXECUTABLE = "failed_executable"
 STATUS_FAILED_INPUT_WRITE = "failed_input_write"
 STATUS_FAILED_EXECUTION = "failed_execution"
+STATUS_FAILED_RESOURCE_LIMIT = "failed_resource_limit"
 STATUS_FAILED_CONVERGENCE = "failed_convergence"
 STATUS_FAILED_OUTPUTS = "failed_outputs"
 STATUS_FAILED_BUDGET = "failed_budget"
@@ -49,11 +52,14 @@ TERMINAL_STATUSES = {
     STATUS_CANCELLED,
     STATUS_TIMED_OUT,
     STATUS_INTERRUPTED,
+    STATUS_INTERRUPTED_WITH_LIVE_PROCESS,
+    STATUS_FAILED_CANCEL,
     STATUS_FAILED_VALIDATION,
     STATUS_FAILED_COMPILE,
     STATUS_FAILED_EXECUTABLE,
     STATUS_FAILED_INPUT_WRITE,
     STATUS_FAILED_EXECUTION,
+    STATUS_FAILED_RESOURCE_LIMIT,
     STATUS_FAILED_CONVERGENCE,
     STATUS_FAILED_OUTPUTS,
     STATUS_FAILED_BUDGET,
@@ -62,26 +68,62 @@ TERMINAL_STATUSES = {
 
 ALLOWED_TRANSITIONS = {
     STATUS_CREATED: {STATUS_QUEUED, STATUS_VALIDATING, STATUS_FAILED_VALIDATION},
-    STATUS_QUEUED: {STATUS_STARTING, STATUS_CANCEL_REQUESTED, STATUS_FAILED_VALIDATION, STATUS_INTERRUPTED},
-    STATUS_STARTING: {STATUS_VALIDATING, STATUS_CANCEL_REQUESTED, STATUS_FAILED_VALIDATION, STATUS_INTERRUPTED},
+    STATUS_QUEUED: {STATUS_STARTING, STATUS_CANCEL_REQUESTED, STATUS_FAILED_VALIDATION, STATUS_INTERRUPTED, STATUS_CANCELLED},
+    STATUS_STARTING: {
+        STATUS_VALIDATING,
+        STATUS_CANCEL_REQUESTED,
+        STATUS_FAILED_VALIDATION,
+        STATUS_INTERRUPTED,
+        STATUS_INTERRUPTED_WITH_LIVE_PROCESS,
+        STATUS_FAILED_CANCEL,
+    },
     STATUS_VALIDATING: {
         STATUS_COMPILING,
         STATUS_FAILED_VALIDATION,
         STATUS_FAILED_EXECUTABLE,
         STATUS_CANCEL_REQUESTED,
         STATUS_INTERRUPTED,
+        STATUS_INTERRUPTED_WITH_LIVE_PROCESS,
+        STATUS_FAILED_CANCEL,
+        STATUS_FAILED_RESOURCE_LIMIT,
     },
-    STATUS_COMPILING: {STATUS_WRITING_INPUT, STATUS_FAILED_COMPILE, STATUS_CANCEL_REQUESTED, STATUS_INTERRUPTED},
-    STATUS_WRITING_INPUT: {STATUS_RUNNING, STATUS_FAILED_INPUT_WRITE, STATUS_CANCEL_REQUESTED, STATUS_INTERRUPTED},
+    STATUS_COMPILING: {
+        STATUS_WRITING_INPUT,
+        STATUS_FAILED_COMPILE,
+        STATUS_CANCEL_REQUESTED,
+        STATUS_INTERRUPTED,
+        STATUS_INTERRUPTED_WITH_LIVE_PROCESS,
+        STATUS_FAILED_CANCEL,
+        STATUS_FAILED_RESOURCE_LIMIT,
+    },
+    STATUS_WRITING_INPUT: {
+        STATUS_RUNNING,
+        STATUS_FAILED_INPUT_WRITE,
+        STATUS_CANCEL_REQUESTED,
+        STATUS_INTERRUPTED,
+        STATUS_INTERRUPTED_WITH_LIVE_PROCESS,
+        STATUS_FAILED_CANCEL,
+        STATUS_FAILED_RESOURCE_LIMIT,
+    },
     STATUS_RUNNING: {
         STATUS_POSTPROCESSING,
         STATUS_FAILED_EXECUTION,
+        STATUS_FAILED_RESOURCE_LIMIT,
         STATUS_FAILED_CONVERGENCE,
         STATUS_CANCEL_REQUESTED,
         STATUS_TIMED_OUT,
         STATUS_INTERRUPTED,
+        STATUS_INTERRUPTED_WITH_LIVE_PROCESS,
+        STATUS_FAILED_CANCEL,
     },
-    STATUS_CANCEL_REQUESTED: {STATUS_CANCELLED, STATUS_TIMED_OUT, STATUS_INTERRUPTED},
+    STATUS_CANCEL_REQUESTED: {
+        STATUS_CANCELLED,
+        STATUS_TIMED_OUT,
+        STATUS_INTERRUPTED,
+        STATUS_INTERRUPTED_WITH_LIVE_PROCESS,
+        STATUS_FAILED_CANCEL,
+        STATUS_FAILED_RESOURCE_LIMIT,
+    },
     STATUS_POSTPROCESSING: {
         STATUS_COMPLETED,
         STATUS_COMPLETED_WITH_WARNINGS,
@@ -91,6 +133,9 @@ ALLOWED_TRANSITIONS = {
         STATUS_FAILED_POSTPROCESSING,
         STATUS_CANCEL_REQUESTED,
         STATUS_INTERRUPTED,
+        STATUS_INTERRUPTED_WITH_LIVE_PROCESS,
+        STATUS_FAILED_CANCEL,
+        STATUS_FAILED_RESOURCE_LIMIT,
     },
 }
 
@@ -107,6 +152,9 @@ ERROR_BY_STATUS = {
     STATUS_CANCELLED: "RUN_CANCELLED",
     STATUS_TIMED_OUT: "RUN_TIMED_OUT",
     STATUS_INTERRUPTED: "RUN_INTERRUPTED",
+    STATUS_INTERRUPTED_WITH_LIVE_PROCESS: "RUN_INTERRUPTED_WITH_LIVE_PROCESS",
+    STATUS_FAILED_CANCEL: "RUN_CANCEL_FAILED",
+    STATUS_FAILED_RESOURCE_LIMIT: "RUN_RESOURCE_LIMIT_EXCEEDED",
 }
 
 
@@ -205,14 +253,33 @@ def build_run_manifest(project: Dict[str, Any], run_id: str, flow_model_id: str)
         "executor": {
             "type": None,
             "idempotency_key": None,
+            "owner_id": None,
+            "lease_token": None,
+            "lease_expires_at": None,
+            "run_token": None,
             "worker_pid": None,
+            "worker_identity": None,
             "mf6_pid": None,
+            "mf6_identity": None,
+            "process_group_id": None,
             "timeout_seconds": None,
+            "timed_out_at": None,
+            "run_duration_seconds": None,
             "cancel_requested_at": None,
             "cancelled_at": None,
             "cancel_reason": None,
             "cancel_source": None,
+            "cancel_duration_seconds": None,
+            "termination": None,
             "resource_estimate": None,
+        },
+        "resource_usage": {
+            "monitor": None,
+            "samples": 0,
+            "peak_rss_bytes": 0,
+            "peak_cpu_seconds": 0.0,
+            "last_sample": None,
+            "limits": {},
         },
         "model_snapshot": {
             "project_checksum": None,
@@ -277,23 +344,77 @@ def validate_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
     manifest = to_jsonable(manifest)
     if manifest.get("schema_name") != SCHEMA_NAME:
         raise RunManifestValidationError("run manifest schema_name is invalid")
-    if manifest.get("schema_version") == "1.0":
+    if manifest.get("schema_version") in {"1.0", "1.1"}:
         manifest = dict(manifest)
         manifest["schema_version"] = SCHEMA_VERSION
-        manifest.setdefault("executor", {
+        manifest.setdefault("executor", {})
+        manifest["executor"] = {
             "type": None,
             "idempotency_key": None,
+            "owner_id": None,
+            "lease_token": None,
+            "lease_expires_at": None,
+            "run_token": None,
             "worker_pid": None,
+            "worker_identity": None,
             "mf6_pid": None,
+            "mf6_identity": None,
+            "process_group_id": None,
             "timeout_seconds": None,
+            "timed_out_at": None,
+            "run_duration_seconds": None,
             "cancel_requested_at": None,
             "cancelled_at": None,
             "cancel_reason": None,
             "cancel_source": None,
+            "cancel_duration_seconds": None,
+            "termination": None,
             "resource_estimate": None,
+            **manifest["executor"],
+        }
+        manifest.setdefault("resource_usage", {
+            "monitor": None,
+            "samples": 0,
+            "peak_rss_bytes": 0,
+            "peak_cpu_seconds": 0.0,
+            "last_sample": None,
+            "limits": {},
         })
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise RunManifestValidationError("run manifest schema_version is unsupported")
+    manifest.setdefault("executor", {})
+    executor_defaults = {
+        "type": None,
+        "idempotency_key": None,
+        "owner_id": None,
+        "lease_token": None,
+        "lease_expires_at": None,
+        "run_token": None,
+        "worker_pid": None,
+        "worker_identity": None,
+        "mf6_pid": None,
+        "mf6_identity": None,
+        "process_group_id": None,
+        "timeout_seconds": None,
+        "timed_out_at": None,
+        "run_duration_seconds": None,
+        "cancel_requested_at": None,
+        "cancelled_at": None,
+        "cancel_reason": None,
+        "cancel_source": None,
+        "cancel_duration_seconds": None,
+        "termination": None,
+        "resource_estimate": None,
+    }
+    manifest["executor"] = {**executor_defaults, **manifest["executor"]}
+    manifest.setdefault("resource_usage", {
+        "monitor": None,
+        "samples": 0,
+        "peak_rss_bytes": 0,
+        "peak_cpu_seconds": 0.0,
+        "last_sample": None,
+        "limits": {},
+    })
     validate_run_id(manifest.get("run_id"))
     if manifest.get("status") not in (set(ALLOWED_TRANSITIONS) | TERMINAL_STATUSES):
         raise RunManifestValidationError("run manifest status is invalid")

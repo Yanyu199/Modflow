@@ -26,19 +26,30 @@ class ResultServiceError(ValueError):
 
 
 class ResultSliceCache:
-    def __init__(self, max_bytes: int):
+    def __init__(self, max_bytes: int, enabled: bool = True):
         self.max_bytes = int(max_bytes)
+        self.enabled = bool(enabled) and self.max_bytes > 0
         self._items = OrderedDict()
         self.current_bytes = 0
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
 
     def get(self, key):
-        if key not in self._items:
+        if not self.enabled:
+            self.misses += 1
             return None
+        if key not in self._items:
+            self.misses += 1
+            return None
+        self.hits += 1
         value, size = self._items.pop(key)
         self._items[key] = (value, size)
         return value
 
     def put(self, key, value):
+        if not self.enabled:
+            return value
         size = int(getattr(value, "nbytes", 0))
         if size > self.max_bytes:
             return value
@@ -48,6 +59,7 @@ class ResultSliceCache:
         while self.current_bytes + size > self.max_bytes and self._items:
             _k, (_v, old_size) = self._items.popitem(last=False)
             self.current_bytes -= old_size
+            self.evictions += 1
         self._items[key] = (value, size)
         self.current_bytes += size
         return value
@@ -57,7 +69,16 @@ class ResultSliceCache:
         self.current_bytes = 0
 
     def stats(self):
-        return {"items": len(self._items), "bytes": self.current_bytes, "max_bytes": self.max_bytes}
+        return {
+            "enabled": self.enabled,
+            "scope": "per_process",
+            "items": len(self._items),
+            "bytes": self.current_bytes,
+            "max_bytes": self.max_bytes,
+            "hits": self.hits,
+            "misses": self.misses,
+            "evictions": self.evictions,
+        }
 
 
 class ResultService:
@@ -65,7 +86,7 @@ class ResultService:
         self.project_store = project_store or ProjectStore()
         self.run_store = run_store or RunManifestStore(self.project_store)
         self.config = config
-        self.cache = ResultSliceCache(config.max_result_cache_bytes)
+        self.cache = ResultSliceCache(config.max_result_cache_bytes, enabled=config.result_cache_enabled)
 
     def variables(self, project_id: str, run_id: str) -> Dict[str, Any]:
         manifest, _run_root = self._load_completed_run(project_id, run_id)
@@ -171,7 +192,8 @@ class ResultService:
             "cache": self.cache.stats(),
         }
         if fmt == "binary":
-            return {"metadata": metadata, "bytes": array.astype("<f8", copy=False).tobytes(order="C")}
+            binary_array = np.ascontiguousarray(array.astype("<f8", copy=False))
+            return {"metadata": metadata, "bytes": memoryview(binary_array).cast("B"), "_array_ref": binary_array}
         return {"metadata": metadata, "values": array.tolist()}
 
     def _load_completed_run(self, project_id: str, run_id: str) -> Tuple[Dict[str, Any], Path]:

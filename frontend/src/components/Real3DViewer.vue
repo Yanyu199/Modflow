@@ -634,6 +634,14 @@ export default {
       this.animationId = requestAnimationFrame(this.animate);
       if (this.controls) this.controls.update();
       if (this.renderer) this.renderer.render(this.scene, this.camera);
+    },
+
+    async runRenderBenchmark(options = {}) {
+      if (!this.renderer) {
+        throw new Error('Renderer is not initialized.');
+      }
+      const { runInstancedMeshBenchmark } = await import('../visualization/renderBenchmark');
+      return runInstancedMeshBenchmark(THREE, this.renderer, options);
     }
   }
 };

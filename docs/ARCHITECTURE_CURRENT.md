@@ -10,7 +10,7 @@ flowchart LR
   Executor["LocalProcessRunExecutor"]
   Worker["Worker process"]
   MF6["MODFLOW 6 executable"]
-  Manifest["run_manifest v1.1"]
+  Manifest["run_manifest v1.2"]
   Artifacts["lst/hds/bud/input packages"]
 
   Browser --> RunAPI

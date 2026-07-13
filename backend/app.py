@@ -43,14 +43,25 @@ geology_service = GeologyModelService(project_store)
 grid_service = GridModelService(project_store)
 flow_service = FlowModelService(project_store)
 run_service = RunService(project_store, flow_service=flow_service)
-run_executor = LocalProcessRunExecutor(project_store, DEFAULT_RUNTIME_CONFIG)
 result_service = ResultService(project_store)
+
+
+def make_run_executor():
+    return LocalProcessRunExecutor(
+        project_store,
+        DEFAULT_RUNTIME_CONFIG,
+        auto_start=DEFAULT_RUNTIME_CONFIG.executor_mode == "embedded",
+        recover_on_start=DEFAULT_RUNTIME_CONFIG.executor_mode == "embedded",
+    )
+
+
+run_executor = make_run_executor()
 
 
 def ensure_run_executor():
     global run_executor, result_service
     if getattr(run_executor.project_store, "root", None) != project_store.root:
-        run_executor = LocalProcessRunExecutor(project_store, DEFAULT_RUNTIME_CONFIG)
+        run_executor = make_run_executor()
         result_service = ResultService(project_store)
     return run_executor
 
@@ -563,12 +574,47 @@ def result_head(project_id, run_id):
             fmt=fmt,
         )
         if fmt == "binary":
-            response = Response(result["bytes"], mimetype="application/octet-stream")
+            response = Response([result["bytes"]], mimetype="application/octet-stream")
             response.headers["X-Result-Metadata"] = __import__("json").dumps(result["metadata"], separators=(",", ":"))
             return response
         return jsonify({"success": True, **result})
     except Exception as e:
         return result_exception_response(e)
+
+
+@app.route('/system/runtime-status', methods=['GET'])
+def runtime_status():
+    try:
+        executor_status = ensure_run_executor().status()
+        run_counts = {}
+        for manifest in app_module_run_store().iter_all():
+            status = manifest.get("status") or "unknown"
+            run_counts[status] = run_counts.get(status, 0) + 1
+        return jsonify({
+            "success": True,
+            "executor": {
+                "mode": DEFAULT_RUNTIME_CONFIG.executor_mode,
+                "active_processes": executor_status.get("active_processes"),
+                "scheduler": executor_status.get("scheduler"),
+            },
+            "limits": {
+                "max_concurrent_runs": DEFAULT_RUNTIME_CONFIG.max_concurrent_runs,
+                "max_runs_per_project": DEFAULT_RUNTIME_CONFIG.max_runs_per_project,
+                "run_timeout_seconds": DEFAULT_RUNTIME_CONFIG.run_timeout_seconds,
+                "max_process_memory_bytes": DEFAULT_RUNTIME_CONFIG.max_process_memory_bytes,
+                "max_result_cache_bytes": DEFAULT_RUNTIME_CONFIG.max_result_cache_bytes,
+            },
+            "runs": run_counts,
+            "result_cache": result_service.cache.stats(),
+        })
+    except Exception as e:
+        return api_error(str(e), 500, "runtime_status_failed")
+
+
+def app_module_run_store():
+    from run_manifest_store import RunManifestStore
+
+    return RunManifestStore(project_store)
 
 
 @app.route('/upload-boreholes', methods=['POST'])

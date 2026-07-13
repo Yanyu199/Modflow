@@ -71,3 +71,43 @@ business logic and should be thinned further in a later UI refactor.
 `Real3DViewer` already used `InstancedMesh` for grid voxels. This update adds
 shared disposal helpers and a removable resize listener. Result slices should be
 loaded by layer and cached as typed arrays.
+
+## Bundle And Lazy Loading
+
+Production webpack builds now use production mode, disabled production source
+maps, async chunk filenames, and performance warnings. Workflow panels behind
+the top page switches are async components so large analysis/flow/geology panels
+are split out of the initial chunk where possible.
+
+After a production build:
+
+```bash
+cd frontend
+pnpm run bundle:report
+```
+
+The report includes raw and gzip sizes for initial and async JS chunks and writes
+`dist/bundle-report.json`.
+
+Local build on 2026-07-13:
+
+- previous main bundle: about 11.1 MiB raw
+- current `main.js`: 1.96 MiB raw, 509,091 bytes gzip
+- current async JS total: 4,726,710 bytes raw, 1,405,600 bytes gzip
+- largest async vendor chunk: 4.4 MiB raw, 1,372,492 bytes gzip
+
+The initial gzip budget passes. The async vendor chunk still exceeds the current
+async budget and should be split further before production use.
+
+## Rendering Benchmark
+
+The viewer exposes a browser-side benchmark:
+
+```js
+await vm.$refs.viewer3d.runRenderBenchmark()
+```
+
+It renders real `THREE.InstancedMesh` cases for 10k, 50k, 100k, and 200k
+instances by default and records draw calls, triangles, first frame, average
+FPS, P95 frame time, picking time, color update time, and heap readings where
+the browser exposes `performance.memory`.
