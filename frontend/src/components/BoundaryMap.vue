@@ -112,7 +112,13 @@ export default {
       if (res.success) {
         this.boundary = res.data;
         this.gridLines = null; this.centerPoints = null; this.gridInfo = null; this.clickedCell = null;
-        this.$emit('boundary-loaded', this.boundary);
+        this.$emit('boundary-loaded', {
+          coords: this.boundary,
+          geology_model: res.geology_model,
+          diagnostics: res.diagnostics,
+          boundary_feature: res.boundary_feature,
+          shapefile_crs: res.shapefile_crs
+        });
         this.drawMap();
       } else {
         this.$message.error(res.error || '边界解析失败');
@@ -138,7 +144,11 @@ export default {
     // 新增：断层文件上传成功回调
     onFaultsUploadSuccess(res) {
       if (res.success) {
-        this.$emit('faults-loaded', res.faults);
+        this.$emit('faults-loaded', {
+          faults: res.faults,
+          geology_model: res.geology_model,
+          diagnostics: res.diagnostics
+        });
       } else {
         this.$message.error(res.error || "断层解析失败");
       }

@@ -294,6 +294,7 @@ export default {
   data() {
     return {
       currentProject: null,
+      currentGeologyModel: null,
       projectDialogVisible: true,
       projectSubmitting: false,
       pendingLegacyProjectState: null,
@@ -325,6 +326,7 @@ export default {
     hasAnyModelData() {
       return Boolean(
         this.boundary
+        || this.currentGeologyModel
         || this.rawCsvContent
         || this.faults.length > 0
         || this.wells.length > 0
@@ -340,9 +342,17 @@ export default {
       return `${this.currentProject.name} | EPSG:${crs.code} | ${units.horizontal_length}/${units.time}, ${units.flow}`;
     },
     hasGeologyModel() {
-      return Boolean(this.rawCsvContent && this.layerMapping && Object.keys(this.layerMapping).length > 0);
+      return Boolean(
+        this.currentGeologyModel
+        && this.currentGeologyModel.diagnostics
+        && this.currentGeologyModel.diagnostics.valid
+      );
     },
     geologySummary() {
+      if (this.currentGeologyModel && this.currentGeologyModel.diagnostics) {
+        const summary = this.currentGeologyModel.diagnostics.summary || {};
+        return `边界 ${summary.boundary_count || 0} 个，钻孔 ${summary.borehole_count || 0} 个，地层 ${summary.formation_count || 0} 层，断层 ${summary.fault_count || 0} 条`;
+      }
       const boundaryCount = this.boundary ? this.boundary.length : 0;
       const boreholeCount = this.boreholesData ? this.boreholesData.length : 0;
       return `边界点 ${boundaryCount}，钻孔 ${boreholeCount}，地层 ${this.gridConfig.n_layers || 1} 层，断层 ${this.faults.length} 条`;
@@ -409,6 +419,83 @@ export default {
         }
       }
     },
+    showGeologyDiagnostics(diagnostics) {
+      const warningCount = diagnostics && diagnostics.warnings ? diagnostics.warnings.length : 0;
+      if (warningCount > 0) {
+        this.$message.warning(`地质模型已加载，但存在 ${warningCount} 条诊断警告，请在后续检查中复核`);
+      }
+    },
+    boundaryCoordsFromModel(model) {
+      const boundary = model && model.boundary;
+      const geometry = boundary && boundary.geometry;
+      if (!geometry || !geometry.coordinates) return null;
+      const ring = geometry.type === 'MultiPolygon'
+        ? geometry.coordinates[0] && geometry.coordinates[0][0]
+        : geometry.coordinates[0];
+      if (!Array.isArray(ring)) return null;
+      return ring.map(point => ({ x: Number(point[0]), y: Number(point[1]) }));
+    },
+    faultLinesFromModel(model) {
+      if (!model || !Array.isArray(model.faults)) return [];
+      return model.faults.map(fault => {
+        const geometry = fault.geometry || {};
+        const coords = geometry.type === 'MultiLineString'
+          ? (geometry.coordinates[0] || [])
+          : (geometry.coordinates || []);
+        return coords.map(point => ({ x: Number(point[0]), y: Number(point[1]) }));
+      }).filter(line => line.length > 0);
+    },
+    boreholesFromModel(model) {
+      if (!model || !Array.isArray(model.boreholes)) return [];
+      const formations = (model.stratigraphy && model.stratigraphy.formations) || [];
+      return model.boreholes.map(borehole => ({
+        name: borehole.borehole_id,
+        x: borehole.x,
+        y: borehole.y,
+        layers: (borehole.intervals || []).map(interval => {
+          const layerIndex = formations.findIndex(item => item.formation_id === interval.formation_id);
+          const formation = layerIndex >= 0 ? formations[layerIndex] : null;
+          return {
+            layer_id: formation ? (formation.source_layer_id || formation.order) : interval.formation_id,
+            layer_idx: layerIndex >= 0 ? layerIndex : 0,
+            top: interval.top_elevation,
+            bottom: interval.bottom_elevation,
+            lithology: interval.lithology || ''
+          };
+        })
+      }));
+    },
+    applyNormalizedGeologyModel(model) {
+      if (!model) return;
+      this.currentGeologyModel = model;
+      const formations = (model.stratigraphy && model.stratigraphy.formations) || [];
+      this.layerMapping = {};
+      formations.forEach((formation, index) => {
+        this.$set(this.layerMapping, index, formation.source_layer_id || formation.order);
+      });
+      if (formations.length > 0) this.gridConfig.n_layers = formations.length;
+
+      const boundary = this.boundaryCoordsFromModel(model);
+      if (boundary) this.boundary = boundary;
+      this.faults = this.faultLinesFromModel(model);
+      this.boreholesData = this.boreholesFromModel(model);
+      this.showGeologyDiagnostics(model.diagnostics);
+    },
+    async persistGeologyModelToBackend(model) {
+      if (!this.ensureProjectContext('导入地质体模型')) return null;
+      const validateRes = await axios.post(
+        `http://localhost:5000/projects/${this.projectId}/geology-models/validate`,
+        model
+      );
+      const normalized = validateRes.data.geology_model;
+      const createRes = await axios.post(
+        `http://localhost:5000/projects/${this.projectId}/geology-models`,
+        normalized
+      );
+      const saved = createRes.data.geology_model;
+      this.applyNormalizedGeologyModel(saved);
+      return saved;
+    },
     async applyProjectState(state, options = {}) {
       if (state.boundary) this.boundary = state.boundary;
       if (state.faults) this.faults = state.faults;
@@ -421,6 +508,7 @@ export default {
       if (state.layerMapping) this.layerMapping = state.layerMapping;
       if (state.rawCsvContent) this.rawCsvContent = state.rawCsvContent;
       if (state.boreholesData) this.boreholesData = state.boreholesData;
+      if (state.geology_model) this.applyNormalizedGeologyModel(state.geology_model);
 
       this.resultPoints = [];
       this.currentLogs = '';
@@ -449,6 +537,7 @@ export default {
       if (data.layer_mapping) this.layerMapping = data.layer_mapping;
       this.rawCsvContent = data.rawCsv;
       this.boreholesData = data.boreholes;
+      if (data.geology_model) this.applyNormalizedGeologyModel(data.geology_model);
       this.$message.success(`钻孔解析成功！请点击“预览钻孔”查看。`);
     },
 
@@ -474,31 +563,18 @@ export default {
     },
 
     buildGeologyModelPayload() {
-      return {
-        schema_version: 'geology_model_v1',
-        exported_at: new Date().toISOString(),
-        project_context: this.currentProject,
-        boundary: this.boundary,
-        faults: this.faults,
-        gridConfig: this.gridConfig,
-        layerMapping: this.layerMapping,
-        rawCsvContent: this.rawCsvContent,
-        boreholesData: this.boreholesData,
-        units: {
-          length: 'meters',
-          time: 'days'
-        }
-      };
+      return this.currentGeologyModel ? JSON.parse(JSON.stringify(this.currentGeologyModel)) : null;
     },
 
     exportGeologyModel() {
       if (!this.ensureProjectContext('导出地质体模型')) return;
-      if (!this.rawCsvContent || !this.layerMapping || Object.keys(this.layerMapping).length === 0) {
-        this.$message.warning('请先导入并解析钻孔数据，再导出地质体模型');
+      const payload = this.buildGeologyModelPayload();
+      if (!payload) {
+        this.$message.warning('请先完成并通过后端验证地质体模型，再导出');
         return;
       }
       this.downloadJsonFile(
-        this.buildGeologyModelPayload(),
+        payload,
         `geology_model_${new Date().toISOString().slice(0,10)}.json`
       );
       this.$message.success('地质体模型已导出');
@@ -511,7 +587,10 @@ export default {
       const formData = new FormData();
       formData.append('file', blob, 'recovered_boreholes.csv');
       formData.append('project_id', this.projectId);
-      await axios.post('http://localhost:5000/upload-boreholes', formData);
+      const response = await axios.post('http://localhost:5000/upload-boreholes', formData);
+      if (response.data && response.data.geology_model) {
+        this.applyNormalizedGeologyModel(response.data.geology_model);
+      }
     },
 
     syncVisibleMap() {
@@ -530,22 +609,18 @@ export default {
     saveProject() {
       if (!this.ensureProjectContext('保存项目')) return;
       const projectData = {
-        schema_name: 'modflow_project_bundle',
-        schema_version: '1.0',
+        bundle_schema: 'modflow_project_bundle',
+        bundle_version: '1.0',
         exported_at: new Date().toISOString(),
         project: this.currentProject,
+        geology_model: this.currentGeologyModel ? JSON.parse(JSON.stringify(this.currentGeologyModel)) : null,
         state: {
-          boundary: this.boundary,
-          faults: this.faults,
           gridConfig: this.gridConfig,
           boundaryConfigs: this.boundaryConfigs,
           wells: this.wells,
           kCells: this.kCells,
           rchData: this.rchData,
-          evtData: this.evtData,
-          layerMapping: this.layerMapping,
-          rawCsvContent: this.rawCsvContent,
-          boreholesData: this.boreholesData
+          evtData: this.evtData
         }
       };
       
@@ -559,18 +634,39 @@ export default {
       reader.onload = async (e) => {
         try {
           const json = JSON.parse(e.target.result);
-          const model = json.schema_version === 'geology_model_v1' ? json : json.geologyModel || json;
-          if (!this.currentProject && model.project_context) {
-            await this.ensureBackendProject(model.project_context);
+          const model = json.schema_name === 'geology_model'
+            ? json
+            : (json.geology_model || json.geologyModel || null);
+
+          if (model && model.schema_name === 'geology_model') {
+            await this.persistGeologyModelToBackend(model);
+            this.boundaryConfigs = {};
+            this.wells = [];
+            this.kCells = [];
+            this.rchData = [];
+            this.evtData = [];
+            this.resultPoints = [];
+            this.currentLogs = '';
+            this.currentSegmentIdx = null;
+            this.activeStep = '4';
+            this.syncVisibleMap();
+            if (this.currentGeologyModel) await this.fetchGridPreview();
+            this.$message.success('地质体模型已通过后端验证并加载');
+            return;
+          }
+
+          const legacyModel = json.schema_version === 'geology_model_v1' ? json : model || json;
+          if (!this.currentProject && legacyModel.project_context) {
+            await this.ensureBackendProject(legacyModel.project_context);
           }
           if (!this.ensureProjectContext('加载地质体模型')) return;
 
-          this.boundary = model.boundary || null;
-          this.faults = model.faults || [];
-          if (model.gridConfig) this.gridConfig = model.gridConfig;
-          this.layerMapping = model.layerMapping || {};
-          this.rawCsvContent = model.rawCsvContent || null;
-          this.boreholesData = model.boreholesData || null;
+          this.boundary = legacyModel.boundary || null;
+          this.faults = legacyModel.faults || [];
+          if (legacyModel.gridConfig) this.gridConfig = legacyModel.gridConfig;
+          this.layerMapping = legacyModel.layerMapping || {};
+          this.rawCsvContent = legacyModel.rawCsvContent || null;
+          this.boreholesData = legacyModel.boreholesData || null;
 
           this.boundaryConfigs = {};
           this.wells = [];
@@ -583,16 +679,18 @@ export default {
           this.activeStep = '4';
 
           if (this.rawCsvContent) {
-            this.$message.info('正在恢复后端地质模型...');
+            this.$message.info('正在通过 legacy CSV 恢复后端地质模型...');
             await this.restoreBackendGeologyFromCsv();
+          } else {
+            throw new Error('旧地质模型缺少可迁移的标准 geology_model 或 rawCsvContent');
           }
 
           this.syncVisibleMap();
-          if (this.rawCsvContent) await this.fetchGridPreview();
+          if (this.currentGeologyModel) await this.fetchGridPreview();
           this.$message.success('地质体模型已加载，可以开始配置水动力场');
         } catch (err) {
           console.error(err);
-          this.$message.error('地质体模型文件解析失败，或后端地质模型恢复失败');
+          this.$message.error(err.response?.data?.error || err.message || '地质体模型文件解析失败，或后端地质模型恢复失败');
         }
       };
       reader.readAsText(file.raw);
@@ -605,6 +703,20 @@ export default {
       reader.onload = async (e) => {
         try {
           const json = JSON.parse(e.target.result);
+          if (json.bundle_schema === 'modflow_project_bundle' && json.project) {
+            await this.ensureBackendProject(json.project);
+            if (json.geology_model) {
+              await this.persistGeologyModelToBackend(json.geology_model);
+            } else {
+              this.currentGeologyModel = null;
+            }
+            if (json.state) await this.applyProjectState(json.state, { restoreBackend: false });
+            this.syncVisibleMap();
+            if (this.currentGeologyModel) await this.fetchGridPreview();
+            this.$message.success("项目加载成功！");
+            return;
+          }
+
           if (json.schema_name === 'modflow_project_bundle' && json.project && json.state) {
             await this.ensureBackendProject(json.project);
             await this.applyProjectState(json.state, { restoreBackend: true });
@@ -638,17 +750,21 @@ export default {
     },
 
     onBoundaryLoaded(data) { 
-        this.boundary = data; 
+        const payload = Array.isArray(data) ? { coords: data } : (data || {});
+        this.boundary = payload.coords || [];
+        if (payload.geology_model) this.applyNormalizedGeologyModel(payload.geology_model);
         this.wells = []; this.kCells = []; this.resultPoints = [];
         this.$message.success("边界加载成功");
     },
 
     // 新增：断层加载成功回调
     onFaultsLoaded(data) {
-        this.faults = data;
-        this.$message.success(`成功载入 ${data.length} 条断层线`);
+        const payload = Array.isArray(data) ? { faults: data } : (data || {});
+        this.faults = payload.faults || [];
+        if (payload.geology_model) this.applyNormalizedGeologyModel(payload.geology_model);
+        this.$message.success(`成功载入 ${this.faults.length} 条断层线`);
         // 如果已经上传过钻孔并生成了网格，自动刷新3D网格预览
-        if (this.rawCsvContent) {
+        if (this.hasGeologyModel) {
             this.fetchGridPreview();
         }
     },

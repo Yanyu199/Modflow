@@ -81,24 +81,25 @@
 - 返回 convergence status、package budget、percent discrepancy。
 - 增加标准模型回归测试。
 
-### 地质派生状态仍是内存缓存
+### 地质派生面 artifact 尚未持久化
 
 现象：
 
 - Project Schema v1.0 已建立，项目定义持久化到 `backend/projects/<project_id>/project.json`。
 - 正常流程不再隐式使用 `project_id='default'`，项目相关 API 要求显式 `project_id`。
-- `GEO_MODELS` 仍是进程内全局字典，只是已按 `project_id` 隔离。
+- `geology_model` schema v1.0 已建立，边界、钻孔、地层、断层、插值参数和 diagnostics 持久化到 `backend/projects/<project_id>/geology/geology_model.json`。
+- `GEO_MODELS` 仍是进程内全局字典，但只作为可从持久化 geology model 重建的缓存。
 
 风险：
 
-- 进程重启后项目定义可恢复，但地质插值对象需要重新由钻孔源数据恢复。
-- 还没有正式 `geology_model_v1` 后端 schema，地质派生面不能独立复核。
+- 进程重启后可重建 `GeologicalModeler`，但地层面大数组尚未作为受控 artifact 保存。
+- 大型模型每次重建可能耗时，且尚未保存地层面数组 checksum/shape。
 - 多进程部署时每个进程会有自己的 `GEO_MODELS` 缓存。
 
 建议：
 
-- 下一步建立 `geology_model_v1` schema 和后端校验接口。
-- 后续把钻孔源文件、地层面、插值参数和诊断保存到项目目录。
+- 后续把派生地层面保存为后端控制的 `.npz` 或等效 artifact，并在 geology model 中记录 artifact ID、shape、checksum 和输入 hash。
+- 增加插值输出 benchmark，验证重建结果和 artifact 一致。
 - 多进程/多用户前再引入数据库或共享缓存。
 
 ## High
@@ -178,19 +179,19 @@
 现象：
 
 - 正式项目定义已使用 `modflow_project` schema v1.0。
-- 前端下载的项目包为 `modflow_project_bundle`，包含项目定义和当前 state。
-- 后端钻孔模型仍通过 `rawCsvContent` 重新上传恢复。
-- 地质体、流场配置和运行历史还没有各自的正式 schema。
+- 前端下载的项目包为 `modflow_project_bundle`，新格式包含 `project`、`geology_model` 和当前流场 UI state。
+- 地质体已有正式 schema 和后端持久化。
+- 流场配置和运行历史还没有各自的正式 schema。
 
 风险：
 
-- 二进制 XLSX、Shapefile、运行结果不能可靠保存。
+- 二进制 XLSX、Shapefile 原文件和运行结果不能可靠托管。
 - 打开旧 JSON 需要用户补充项目 CRS/单位，不能完全自动迁移。
 
 建议：
 
 - 保存源文件引用或后端托管文件。
-- 建立 `geology_model_v1`、`flow_model_v1` 和 run manifest。
+- 建立 `flow_model_v1` 和 run manifest。
 - 保存运行历史和结果摘要。
 
 ## Medium
@@ -199,8 +200,8 @@
 
 现象：
 
-- ZIP 解压使用 `extractall()`，未检查路径穿越。
-- API 多数直接访问字段并捕获异常。
+- 地质模型相关 ZIP 已检查路径穿越和大小限制；其他上传入口仍需逐一复核。
+- geology model 相关 API 已有 schema diagnostics；流场相关 API 多数仍直接访问字段并捕获异常。
 - Flask `debug=True` 且 `host='0.0.0.0'`。
 - CORS 全开放。
 
@@ -304,8 +305,8 @@
 
 ## Recommended Immediate Fix Order
 
-1. 为主应用运行增加正式 run manifest 和清理策略。
-2. 修复 MODPATH 路径配置和启动自检。
-3. 统一前后端网格生成，消除 row/col 不一致。
+1. 建立后端唯一网格定义、稳定 `cell_id` 和地质网格质量检查。
+2. 为主应用运行增加正式 run manifest 和清理策略。
+3. 修复 MODPATH 路径配置和启动自检。
 4. 禁用或补齐 UI-only 功能：DRN/GHB/RCH/EVT/MODPATH。
 5. 将更多 package 纳入标准模型回归测试。

@@ -1,6 +1,7 @@
 import io
 
 import app as app_module
+from geology_model_service import GeologyModelService
 from project_store import ProjectStore
 
 
@@ -38,6 +39,7 @@ def project_payload(project_id=None, name="Project"):
 def client_with_store(tmp_path, monkeypatch):
     store = ProjectStore(tmp_path / "projects")
     monkeypatch.setattr(app_module, "project_store", store)
+    monkeypatch.setattr(app_module, "geology_service", GeologyModelService(store))
     app_module.GEO_MODELS.clear()
     app_module.app.config.update(TESTING=True)
     return app_module.app.test_client(), store

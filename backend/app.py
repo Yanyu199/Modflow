@@ -4,19 +4,30 @@ from flask_cors import CORS
 import os
 import traceback
 import pandas as pd  # 新增 pandas 用于读取断层 Excel/CSV
-from geometry_utils import parse_shapefile_zip, parse_zone_shapefile
+from geometry_utils import parse_boundary_shapefile_zip, parse_shapefile_zip, parse_zone_shapefile
 from modflow_engine import run_simulation, get_grid_geometry
 from export_utils import generate_obj_string
 from geological_builder import GeologicalModeler
+from geology_limits import MAX_JSON_BYTES, MAX_ZIP_BYTES
+from geology_model_schema import (
+    GeologyModelValidationError,
+    boundary_coords_for_frontend,
+    linestring_points_for_engine,
+    normalized_to_frontend,
+)
+from geology_model_service import GeologyModelService
+from geology_model_store import GeologyModelNotFoundError
 from project_schema import ProjectValidationError
 from project_store import ProjectConflictError, ProjectNotFoundError, ProjectStore, validate_project_id
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_ZIP_BYTES
 CORS(app)
 
 # 受控的进程内派生状态缓存。项目定义持久化在 ProjectStore 中；这里的地质模型缓存可失效。
 GEO_MODELS = {}
 project_store = ProjectStore()
+geology_service = GeologyModelService(project_store)
 
 
 def api_error(message, status=400, code="validation_error", details=None):
@@ -24,6 +35,16 @@ def api_error(message, status=400, code="validation_error", details=None):
     if details:
         payload["details"] = details
     return jsonify(payload), status
+
+
+@app.before_request
+def reject_oversized_json_request():
+    if request.is_json and request.content_length and request.content_length > MAX_JSON_BYTES:
+        return api_error(
+            f"JSON 请求超过大小限制 {MAX_JSON_BYTES} bytes",
+            413,
+            "json_request_too_large",
+        )
 
 
 def project_exception_response(exc):
@@ -34,6 +55,14 @@ def project_exception_response(exc):
     if isinstance(exc, ProjectValidationError):
         return api_error("项目数据无效", 400, "project_validation_error", exc.errors)
     return api_error(str(exc), 400)
+
+
+def geology_exception_response(exc):
+    if isinstance(exc, GeologyModelNotFoundError):
+        return api_error("地质模型不存在", 404, "geology_model_not_found")
+    if isinstance(exc, GeologyModelValidationError):
+        return api_error("地质模型数据无效", 400, "geology_model_validation_error", exc.diagnostics)
+    return project_exception_response(exc)
 
 
 def json_payload():
@@ -50,6 +79,11 @@ def require_existing_project(project_id):
     project_id = require_project_id(project_id)
     project_store.get(project_id)
     return project_id
+
+
+def get_existing_project(project_id):
+    project_id = require_project_id(project_id)
+    return project_store.get(project_id)
 
 
 def require_project_from_form():
@@ -90,10 +124,83 @@ def get_project(project_id):
 @app.route('/projects/<project_id>', methods=['PUT'])
 def update_project(project_id):
     try:
-        project = project_store.update(project_id, json_payload())
+        payload = json_payload()
+        existing = project_store.get(project_id)
+        if existing.get("references", {}).get("geology_model_id"):
+            if ("crs" in payload and payload["crs"] != existing.get("crs")) or (
+                "units" in payload and payload["units"] != existing.get("units")
+            ):
+                return api_error(
+                    "项目已有地质模型，当前版本不允许直接修改 CRS 或单位；请先执行未来的迁移流程",
+                    409,
+                    "project_context_locked_by_geology_model",
+                )
+        project = project_store.update(project_id, payload)
         return jsonify({"success": True, "project": project})
     except Exception as e:
         return project_exception_response(e)
+
+
+@app.route('/projects/<project_id>/geology-models/validate', methods=['POST'])
+def validate_geology_model(project_id):
+    try:
+        model = geology_service.validate(project_id, json_payload(), allow_incomplete=False)
+        return jsonify({"success": True, "geology_model": model, "diagnostics": model["diagnostics"]})
+    except Exception as e:
+        return geology_exception_response(e)
+
+
+@app.route('/projects/<project_id>/geology-models', methods=['POST'])
+def create_geology_model(project_id):
+    try:
+        model = geology_service.create(project_id, json_payload())
+        GEO_MODELS[project_id] = geology_service.ensure_cache(project_id, GEO_MODELS)
+        return jsonify({
+            "success": True,
+            "geology_model_id": model["geology_model_id"],
+            "geology_model": model,
+            "summary": model["diagnostics"]["summary"],
+        }), 201
+    except Exception as e:
+        return geology_exception_response(e)
+
+
+@app.route('/projects/<project_id>/geology-models/active', methods=['GET'])
+def get_active_geology_model(project_id):
+    try:
+        model = geology_service.get_active(project_id)
+        return jsonify({"success": True, "geology_model": model, "diagnostics": model["diagnostics"]})
+    except Exception as e:
+        return geology_exception_response(e)
+
+
+@app.route('/projects/<project_id>/geology-models/<geology_model_id>', methods=['PUT'])
+def update_geology_model(project_id, geology_model_id):
+    try:
+        model = geology_service.update(project_id, geology_model_id, json_payload())
+        GEO_MODELS.pop(project_id, None)
+        if model["diagnostics"]["valid"]:
+            GEO_MODELS[project_id] = geology_service.ensure_cache(project_id, GEO_MODELS)
+        return jsonify({"success": True, "geology_model": model, "diagnostics": model["diagnostics"]})
+    except Exception as e:
+        return geology_exception_response(e)
+
+
+@app.route('/projects/<project_id>/geology-models/<geology_model_id>/rebuild', methods=['POST'])
+def rebuild_geology_model(project_id, geology_model_id):
+    try:
+        model = geology_service.get_active(project_id)
+        if model["geology_model_id"] != geology_model_id:
+            raise GeologyModelNotFoundError("geology model not found for project")
+        model, frontend_data = geology_service.rebuild(project_id, GEO_MODELS)
+        return jsonify({
+            "success": True,
+            "geology_model_id": model["geology_model_id"],
+            "diagnostics": model["diagnostics"],
+            "frontend": frontend_data,
+        })
+    except Exception as e:
+        return geology_exception_response(e)
 
 
 @app.route('/upload-boreholes', methods=['POST'])
@@ -102,21 +209,20 @@ def upload_boreholes():
         project_id = require_project_from_form()
         file = request.files['file']
 
-        geo_model = GeologicalModeler(file)
-        geo_model.preprocess_data()
-        GEO_MODELS[project_id] = geo_model
-
-        frontend_data = geo_model.get_frontend_data()
+        model = geology_service.update_boreholes_from_upload(project_id, file, cache=GEO_MODELS)
+        frontend_data = normalized_to_frontend(model)
         return jsonify({
             "success": True,
             "message": "钻孔数据解析成功",
             "layers_count": frontend_data['layers_count'],
             "layer_mapping": frontend_data['layer_mapping'],  # 传给前端用于真实物理层映射
-            "boreholes_count": len(geo_model.boreholes),
-            "boreholes": frontend_data['boreholes']
+            "boreholes_count": len(frontend_data['boreholes']),
+            "boreholes": frontend_data['boreholes'],
+            "geology_model": model,
+            "diagnostics": model["diagnostics"],
         })
-    except (ProjectValidationError, ProjectNotFoundError) as e:
-        return project_exception_response(e)
+    except (ProjectValidationError, ProjectNotFoundError, GeologyModelValidationError) as e:
+        return geology_exception_response(e)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -124,7 +230,7 @@ def upload_boreholes():
 @app.route('/upload-faults', methods=['POST'])
 def upload_faults():
     try:
-        require_project_from_form()
+        project_id = require_project_from_form()
         file = request.files['file']
 
         # ⭐ 修改点 1：去掉 .stream，直接将 file 对象传给 pandas，兼容性更好
@@ -151,19 +257,35 @@ def upload_faults():
         for fault_id, group in df.groupby(fault_id_col):
             line_coords = []
             for _, row in group.iterrows():
-                line_coords.append({"x": float(row[x_col]), "y": float(row[y_col])})
+                line_coords.append([float(row[x_col]), float(row[y_col])])
 
             # 断层线至少需要2个点
             if len(line_coords) >= 2:
-                faults_data.append(line_coords)
+                faults_data.append({
+                    "fault_id": f"fault_{fault_id}",
+                    "name": str(fault_id),
+                    "geometry": {"type": "LineString", "coordinates": line_coords},
+                    "properties": {"hydraulic_role": "geologic_partition_only"},
+                    "source_ref": f"upload:{file.filename}",
+                })
+
+        model = geology_service.update_faults(
+            project_id,
+            faults_data,
+            source_metadata={"kind": "csv_or_excel", "crs_source": "user_declared_project_crs"},
+            cache=GEO_MODELS,
+        )
+        frontend_faults = [linestring_points_for_engine(fault) for fault in model["faults"]]
 
         return jsonify({
             "success": True,
-            "message": f"成功解析 {len(faults_data)} 条断层线",
-            "faults": faults_data
+            "message": f"成功解析 {len(frontend_faults)} 条断层线",
+            "faults": frontend_faults,
+            "geology_model": model,
+            "diagnostics": model["diagnostics"],
         })
-    except (ProjectValidationError, ProjectNotFoundError) as e:
-        return project_exception_response(e)
+    except (ProjectValidationError, ProjectNotFoundError, GeologyModelValidationError) as e:
+        return geology_exception_response(e)
     except Exception as e:
         # ⭐ 修改点 2：在终端强行打印出详细的错误追踪信息
         print("\n================== 断层文件读取失败 ==================")
@@ -191,8 +313,9 @@ def run():
             return jsonify({"error": "Invalid boundary"}), 400
 
         # 获取之前上传钻孔生成的的地质模型
-        geo_model = GEO_MODELS.get(project_id)
-        if not geo_model:
+        try:
+            geo_model = geology_service.ensure_cache(project_id, GEO_MODELS)
+        except Exception:
             return jsonify({"error": "请先上传钻孔数据构建地质模型"}), 400
 
         # 调用引擎
@@ -235,8 +358,9 @@ def preview_geometry():
         params = data.get('params')
         faults = data.get('faults', [])  # 获取断层数据
 
-        geo_model = GEO_MODELS.get(project_id)
-        if not geo_model:
+        try:
+            geo_model = geology_service.ensure_cache(project_id, GEO_MODELS)
+        except Exception:
             return jsonify({"error": "请先上传钻孔数据构建地质模型"}), 400
 
         # 核心逻辑：如果此时前端还没画边界，自动根据钻孔外包络线计算一个默认边界
@@ -270,12 +394,27 @@ def preview_geometry():
 @app.route('/upload-shapefile', methods=['POST'])
 def upload_shapefile():
     try:
-        require_project_from_form()
+        project_id = require_project_from_form()
+        project = get_existing_project(project_id)
         file = request.files['file']
-        coords = parse_shapefile_zip(file)
-        return jsonify({"success": True, "data": coords})
-    except (ProjectValidationError, ProjectNotFoundError) as e:
-        return project_exception_response(e)
+        parsed = parse_boundary_shapefile_zip(file)
+        crs = parsed["crs"]
+        if crs is None:
+            return api_error("Shapefile 缺少 CRS，当前版本不能静默猜测", 400, "shapefile_crs_missing")
+        project_crs = project["crs"]
+        if crs.get("authority") != project_crs.get("authority") or crs.get("code") != project_crs.get("code"):
+            return api_error("Shapefile CRS 与项目 CRS 不一致，当前版本不自动重投影", 400, "project_crs_mismatch")
+        model = geology_service.update_boundary(project_id, parsed["feature"], parsed["source"], cache=GEO_MODELS)
+        return jsonify({
+            "success": True,
+            "data": parsed["coords"],
+            "boundary_feature": model["boundary"],
+            "shapefile_crs": crs,
+            "geology_model": model,
+            "diagnostics": model["diagnostics"],
+        })
+    except (ProjectValidationError, ProjectNotFoundError, GeologyModelValidationError) as e:
+        return geology_exception_response(e)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

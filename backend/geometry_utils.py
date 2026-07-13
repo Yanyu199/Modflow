@@ -1,9 +1,13 @@
 import geopandas as gpd
+import json
 import zipfile
 import os
 import tempfile
 from pathlib import Path
 from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString, Point
+from shapely.geometry import mapping
+
+from geology_limits import MAX_ZIP_BYTES
 
 
 def _safe_extract_zip(zip_file, target_dir):
@@ -41,6 +45,52 @@ def parse_shapefile_zip(file_obj):
             polygon = ensure_polygon(geom)
             coords = [{"x": float(x), "y": float(y)} for x, y in polygon.exterior.coords]
             return coords
+    except Exception as e:
+        raise e
+
+
+def _crs_metadata(gdf):
+    if gdf.crs is None:
+        return None
+    epsg = gdf.crs.to_epsg()
+    return {
+        "authority": "EPSG" if epsg else None,
+        "code": int(epsg) if epsg else None,
+        "wkt": None if epsg else gdf.crs.to_wkt(),
+        "axis_order": "xy",
+    }
+
+
+def parse_boundary_shapefile_zip(file_obj):
+    if getattr(file_obj, "content_length", None) and file_obj.content_length > MAX_ZIP_BYTES:
+        raise ValueError("ZIP 文件超过大小限制")
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = os.path.join(tmpdir, "boundary.zip")
+            file_obj.save(zip_path)
+            if os.path.getsize(zip_path) > MAX_ZIP_BYTES:
+                raise ValueError("ZIP 文件超过大小限制")
+            with zipfile.ZipFile(zip_path) as z:
+                _safe_extract_zip(z, tmpdir)
+
+            shp_file = _find_first_shapefile(tmpdir)
+            gdf = gpd.read_file(shp_file)
+            if gdf.empty:
+                raise ValueError("文件为空")
+
+            geom = gdf.geometry.iloc[0]
+            polygon = ensure_polygon(geom)
+            feature = {
+                "type": "Feature",
+                "properties": {},
+                "geometry": json.loads(json.dumps(mapping(polygon))),
+            }
+            return {
+                "feature": feature,
+                "coords": [{"x": float(x), "y": float(y)} for x, y in polygon.exterior.coords],
+                "crs": _crs_metadata(gdf),
+                "source": {"kind": "shapefile_zip", "crs_source": "file" if gdf.crs is not None else "missing"},
+            }
     except Exception as e:
         raise e
 

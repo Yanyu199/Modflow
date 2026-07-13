@@ -4,7 +4,7 @@
 
 ## 目标
 
-`project_v1` 是当前平台的第一个正式项目定义。它只保存项目上下文和最小引用信息，不保存 UI 折叠状态、当前标签页、服务器绝对路径或运行产物路径。地质体模型、流场模型和运行记录后续需要各自建立独立 schema。
+`project_v1` 是当前平台的第一个正式项目定义。它只保存项目上下文和最小引用信息，不保存 UI 折叠状态、当前标签页、服务器绝对路径或运行产物路径。地质体模型已建立独立 `geology_model` schema v1.0；流场模型和运行记录后续仍需要各自建立独立 schema。
 
 ## Schema
 
@@ -109,6 +109,8 @@
 
 更新项目名称、描述、CRS、单位、模型设置、引用或 metadata。`schema_name`、`schema_version`、`project_id` 和 `created_at` 不允许修改。
 
+如果项目已经有 `references.geology_model_id`，当前版本默认拒绝直接修改 CRS 或单位，避免静默改变已有地质数据含义。未来需要通过显式迁移流程处理坐标转换或单位转换。
+
 ## 文件存储
 
 项目定义保存到：
@@ -129,14 +131,15 @@ backend/projects/<project_id>/project.json
 
 ## Legacy 兼容
 
-- 新项目导出使用 `modflow_project_bundle`，内部包含 `project` 和 `state`。
+- 新项目导出使用 `bundle_schema="modflow_project_bundle"` 和 `bundle_version="1.0"`，内部包含 `project`、`geology_model` 和必要的前端流场 `state`。
 - 旧 JSON 不会自动归入 `default`。
 - 导入旧 JSON 时，如果当前没有工程，前端要求用户先创建工程并补充 CRS/单位。
 - 如果已有当前工程，旧 JSON 只能导入到当前工程上下文，且会提示不会自动猜测 CRS 或单位。
+- 旧 `rawCsvContent` 只作为 legacy 地质模型迁移入口；新导出的工程包以标准化 `geology_model` 为恢复依据。
 
 ## 当前限制
 
-- `GEO_MODELS` 仍是进程内派生缓存，只按 `project_id` 隔离，不是正式持久化。
-- 地质体模型还没有后端 `geology_model_v1` schema。
+- `GEO_MODELS` 仍是进程内派生缓存，只按 `project_id` 隔离；权威地质数据已持久化到 `backend/projects/<project_id>/geology/geology_model.json`。
+- 地质体模型已有后端 `geology_model` schema v1.0，但派生地层面数组仍采用可重建策略，尚未保存为 `.npz` 等 artifact。
 - 水动力模型配置、运行历史和 run manifest 仍未持久化到项目目录。
 - Shapefile 文件本身还没有托管到项目目录，本轮只对上传请求做项目校验。

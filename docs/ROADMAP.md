@@ -71,10 +71,12 @@
 
 功能范围：
 
-- `Project` schema v1.0 已完成，后续继续定义 `Grid`、`LayerModel`、`PackageConfig`、`Run` 数据结构。
+- `Project` schema v1.0 已完成。
+- `GeologyModel` schema v1.0 已完成基础版，覆盖边界、钻孔、地层、断层、插值参数、diagnostics、持久化和缓存重建。
+- 后续继续定义 `Grid`、`FlowPackageConfig`、`Run` 数据结构。
 - 输入验证：文件、字段、单位、坐标、层序、参数范围。
-- 项目保存/打开已包含正式 project schema；地质和流场 state 仍需迁移到正式 schema。
-- 后端项目定义不依赖 Flask 全局状态；地质派生模型仍是 `GEO_MODELS[project_id]` 缓存。
+- 项目保存/打开已包含正式 project schema 和 geology model schema；流场 state 仍需迁移到正式 schema。
+- 后端项目定义和地质标准数据不依赖 Flask 全局状态；`GEO_MODELS[project_id]` 只作为可重建缓存。
 
 前置条件：
 
@@ -82,10 +84,10 @@
 
 验收标准：
 
-- 项目 JSON 有 schema version。已完成 `modflow_project` v1.0。
+- 项目 JSON 有 schema version。已完成 `modflow_project` v1.0 和 `geology_model` v1.0。
 - 打开旧项目时有兼容路径或明确报错。
 - API 对错误字段返回结构化错误。
-- 单元测试覆盖钻孔表、边界、多层 top/botm、K/WEL/CHD 配置。
+- 单元测试覆盖 geology schema、边界、钻孔/地层、断层、API、持久化隔离和缓存重建；K/WEL/CHD 配置仍在后续 flow schema 中扩展。
 
 数值基准：
 
@@ -93,7 +95,7 @@
 
 主要风险：
 
-- 当前地质恢复仍依赖 `rawCsvContent`，XLSX 和大型数据不适合作为长期方案。
+- 当前地质恢复不再依赖 `rawCsvContent`，但原始 XLSX/Shapefile 文件托管和派生面 artifact 持久化仍未完成。
 - 修改数据结构会影响前端多处组件，必须小步迁移。
 
 ## Phase 3: Boundary And Source/Sink Completion
@@ -249,10 +251,10 @@
 
 ## 推荐的下一个开发任务
 
-建议下一个开发任务是：建立正式 `geology_model_v1` Schema 和后端校验接口。
+建议下一个开发任务是：建立后端唯一网格定义、稳定 `cell_id` 和地质网格质量检查。
 
 原因：
 
-- 它承接本轮 Project Schema。
-- 它能把边界、钻孔、断层、插值参数和地层面从前端临时 state 中剥离出来。
-- 它是后续后端唯一网格、Flow Model Schema 和保存/打开复现的前置条件。
+- 它承接本轮 `geology_model` schema。
+- 它能消除前端和后端各自计算 row/col 的风险。
+- 它是后续 Flow Model Schema、package 写入测试和保存/打开复现 MF6 输入文件的前置条件。

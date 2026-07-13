@@ -9,6 +9,8 @@ flowchart LR
   Browser["Vue 2 / Element UI / Plotly / Three.js"]
   Flask["Flask API"]
   ProjectStore["ProjectStore / project.json"]
+  GeologyStore["GeologyModelStore / geology_model.json"]
+  GeoSchema["geology_model v1.0 validation"]
   Geo["GeoPandas / Shapely"]
   Modeler["GeologicalModeler"]
   Grid["geometry_tools.generate_grid_info"]
@@ -20,12 +22,15 @@ flowchart LR
   Browser -->|upload shapefile zip| Flask
   Browser -->|create/read/update project| Flask
   Flask --> ProjectStore
+  Flask --> GeoSchema
+  GeoSchema --> GeologyStore
   Flask --> Geo
-  Geo -->|boundary coords| Browser
+  Geo -->|boundary feature + CRS| GeoSchema
 
   Browser -->|upload boreholes csv/xlsx| Flask
-  Flask --> Modeler
-  Modeler -->|stored in GEO_MODELS| Flask
+  Flask --> GeoSchema
+  GeologyStore -->|standardized inputs| Modeler
+  Modeler -->|rebuildable cache in GEO_MODELS| Flask
   Modeler -->|boreholes/layer_mapping| Browser
 
   Browser -->|preview/run params| Flask
@@ -43,18 +48,18 @@ flowchart LR
 ### 边界 Shapefile
 
 1. `BoundaryMap.vue` 使用 `el-upload` 调用 `POST /upload-shapefile`。
-2. `app.py` 调用 `parse_shapefile_zip(file)`。
+2. `app.py` 调用 `parse_boundary_shapefile_zip(file)`。
 3. `geometry_utils.py` 保存 ZIP 到临时目录，解压后读取第一个 `.shp`。
-4. 支持 `Polygon`、`MultiPolygon`、闭合 `LineString`。
-5. 返回首个外环坐标 `[{x, y}, ...]`。
-6. `App.vue` 存入 `boundary`，并通知 `BoundaryMap` 绘图。
+4. 检查 ZIP 路径穿越和大小限制，读取 Shapefile CRS。
+5. CRS 缺失或与项目 CRS 冲突时拒绝。
+6. 支持 `Polygon`、`MultiPolygon`、闭合 `LineString`。
+7. 边界写入标准化 `geology_model.boundary` 并持久化。
+8. `App.vue` 存入外环坐标和 normalized geology model，并通知 `BoundaryMap` 绘图。
 
 限制：
 
-- 未检查 CRS。
 - 未处理内洞。
 - `MultiPolygon` 只取第一个 polygon。
-- ZIP 解压缺少路径安全检查。
 - 只读取第一个 `.shp` 和第一条 geometry。
 
 ### 钻孔和地层
@@ -63,21 +68,23 @@ flowchart LR
 2. `GeologicalModeler` 读取表格。
 3. `preprocess_data()` 读取 `钻孔名称`、`X`、`Y`、`Z`、`分层ID`、`Top/Bottom` 或 `分层厚度`。
 4. 如果没有 Top/Bottom，则用 `Z - 累积厚度` 推算。
-5. 后端要求显式 `project_id` 且项目必须存在，然后以 `GEO_MODELS[project_id] = geo_model` 缓存派生地质模型。
-6. 前端保存 `rawCsvContent`，项目加载时重新调用 `/upload-boreholes` 以恢复后端状态。
+5. 后端要求显式 `project_id` 且项目必须存在。
+6. 上传数据转换为标准化 `boreholes` 和 `stratigraphy.formations`。
+7. `GeologyModelService` 验证、持久化 `geology_model.json`，并更新 `GEO_MODELS[project_id]` 可重建缓存。
+8. 前端保存后端返回的 normalized geology model；`rawCsvContent` 只作为 legacy 迁移输入。
 
 限制：
 
-- 没有 schema 校验和单位校验。
-- CSV/XLSX 编码、列名、重复层位、厚度为负、Top/Bottom 交叉等未系统校验。
-- 项目持久化依赖前端保存原始 CSV 文本，XLSX 项目恢复可能丢失原始二进制语义，需要验证。
+- 已有 schema 校验和 diagnostics，但 CSV/XLSX 列名兼容范围仍有限。
+- 钻孔 CSV/XLSX 没有文件级 CRS 元数据，当前按项目 CRS 和用户声明解释。
+- 地层派生面数组当前不持久化为 `.npz`，而是从标准化输入重建。
 
 ### 断层
 
 1. `BoundaryMap.vue` 调用 `POST /upload-faults`。
 2. `app.py` 用 pandas 读取 CSV/XLSX。
 3. 按 `断层编号` 或 `Fault_ID` 分组，并读取 `X`、`Y`。
-4. 返回断层折线数组。
+4. 转换为标准化 `faults`，持久化到 geology model，并返回断层折线数组。
 5. `GeologicalModeler.interpolate_surfaces()` 用断层线延长后切割域 polygon，并在每个断块内单独插值。
 
 限制：
@@ -85,6 +92,7 @@ flowchart LR
 - 断层没有进入 MODFLOW 6 HFB、DISV/DISU 或任何水力边界 package。
 - 当前断层只影响地层插值分块。
 - 没有断距、倾角、导水/阻水属性、垂向几何。
+- API 会返回 `FAULT_NOT_HFB` warning，避免把当前断层误认成 MODFLOW HFB 或水力屏障。
 
 ### RCH/EVT 分区
 
@@ -204,13 +212,18 @@ flowchart LR
 | `POST /projects` | 是 | 是 | 创建项目并返回稳定 `project_id` |
 | `GET /projects/<project_id>` | 否 | 是 | 后端可读取项目定义 |
 | `PUT /projects/<project_id>` | 是 | 是 | 更新项目元数据/CRS/单位 |
-| `POST /upload-boreholes` | 是 | 是 | 要求显式 `project_id`；数据校验不足 |
-| `POST /upload-faults` | 是 | 是 | 要求显式 `project_id`；只影响插值 |
-| `POST /upload-shapefile` | 是 | 是 | 要求显式 `project_id`；CRS/安全校验不足 |
+| `POST /projects/<project_id>/geology-models/validate` | 是 | 是 | 验证并返回 normalized geology model，不持久化 |
+| `POST /projects/<project_id>/geology-models` | 是 | 是 | 创建 active geology model 并更新 project reference |
+| `GET /projects/<project_id>/geology-models/active` | 间接 | 是 | 读取持久化 active geology model |
+| `PUT /projects/<project_id>/geology-models/<geology_model_id>` | 否 | 是 | 更新 active geology model |
+| `POST /projects/<project_id>/geology-models/<geology_model_id>/rebuild` | 否 | 是 | 从持久化标准输入重建 `GEO_MODELS` 缓存 |
+| `POST /upload-boreholes` | 是 | 是 | 兼容入口；调用统一 geology service |
+| `POST /upload-faults` | 是 | 是 | 兼容入口；断层只影响插值 |
+| `POST /upload-shapefile` | 是 | 是 | 兼容入口；检查 ZIP 安全和 Shapefile CRS |
 | `POST /upload-zone` | 否 | 是 | 后端已实现但 UI 未接入 |
 | `POST /upload-scatter` | 是 | 否 | UI 已存在但后端未实现 |
-| `POST /preview-geometry` | 是 | 是 | 可用，依赖后端全局钻孔模型 |
-| `POST /run-model` | 是 | 是 | 可用，数值验收不足 |
+| `POST /preview-geometry` | 是 | 是 | 可用；缓存缺失时从 active geology model 重建 |
+| `POST /run-model` | 是 | 是 | 可用；缓存缺失时从 active geology model 重建，数值验收不足 |
 | `POST /export-model` | 是 | 是 | 可用，OBJ 网格尺寸由点分布推断 |
 
 ## 状态存储
@@ -218,10 +231,11 @@ flowchart LR
 | 状态 | 位置 | 风险 |
 |---|---|---|
 | 项目定义 | `backend/projects/<project_id>/project.json` | 已持久化；仍无数据库/权限系统 |
-| 钻孔地质模型 | Flask 全局 `GEO_MODELS[project_id]` | 项目间隔离；进程重启后需由源数据恢复 |
-| 边界、断层、井、K、RCH/EVT | `App.vue` 内存和前端项目包 | 刷新丢失，正式 Flow/Geology schema 待实现 |
+| 地质模型标准数据 | `backend/projects/<project_id>/geology/geology_model.json` | active geology model 已持久化；派生面数组仍采用可重建策略 |
+| 钻孔地质模型缓存 | Flask 全局 `GEO_MODELS[project_id]` | 项目间隔离；可由持久化 geology model 重建 |
+| 井、K、RCH/EVT 和边界条件 | `App.vue` 内存和前端项目包 | 刷新后可由项目包恢复；正式 Flow schema 待实现 |
 | 运行输入/输出 | `backend/workspace/<run-id>` | 失败默认保留；成功保留可配置；正式 run history 待实现 |
-| 前端项目文件 | 浏览器下载 `modflow_project_bundle` JSON | 有项目 schema；地质/流场 state 仍是兼容包 |
+| 前端项目文件 | 浏览器下载 `modflow_project_bundle` JSON | 新格式包含 `project`、`geology_model` 和流场 UI state |
 | MF6/MODPATH 可执行路径 | `mf6_executable.py` / `mf6_wrapper.py` | MF6 已统一解析；MODPATH 仍是后续技术债 |
 
 ## Recommended Target Architecture
