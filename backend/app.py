@@ -94,6 +94,11 @@ def require_project_from_json(data):
     return require_existing_project(data.get("project_id"))
 
 
+def truthy_form_value(name):
+    value = request.form.get(name)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 @app.route('/projects/validate', methods=['POST'])
 def validate_project():
     try:
@@ -399,12 +404,31 @@ def upload_shapefile():
         file = request.files['file']
         parsed = parse_boundary_shapefile_zip(file)
         crs = parsed["crs"]
-        if crs is None:
-            return api_error("Shapefile 缺少 CRS，当前版本不能静默猜测", 400, "shapefile_crs_missing")
         project_crs = project["crs"]
+        source_metadata = dict(parsed["source"] or {})
+        if crs is None:
+            if not truthy_form_value("assume_project_crs"):
+                return api_error("Shapefile 缺少 CRS，当前版本不能静默猜测", 400, "shapefile_crs_missing")
+            crs = {
+                "authority": project_crs.get("authority"),
+                "code": project_crs.get("code"),
+                "wkt": project_crs.get("wkt"),
+                "axis_order": project_crs.get("axis_order", "xy"),
+                "source": "user_confirmed_project_crs",
+            }
+            source_metadata.update({
+                "crs_source": "user_confirmed_project_crs",
+                "file_crs_missing": True,
+                "declared_project_crs": {
+                    "authority": project_crs.get("authority"),
+                    "code": project_crs.get("code"),
+                    "wkt": project_crs.get("wkt"),
+                    "axis_order": project_crs.get("axis_order", "xy"),
+                },
+            })
         if crs.get("authority") != project_crs.get("authority") or crs.get("code") != project_crs.get("code"):
             return api_error("Shapefile CRS 与项目 CRS 不一致，当前版本不自动重投影", 400, "project_crs_mismatch")
-        model = geology_service.update_boundary(project_id, parsed["feature"], parsed["source"], cache=GEO_MODELS)
+        model = geology_service.update_boundary(project_id, parsed["feature"], source_metadata, cache=GEO_MODELS)
         return jsonify({
             "success": True,
             "data": parsed["coords"],

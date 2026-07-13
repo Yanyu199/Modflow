@@ -202,6 +202,8 @@ def test_shapefile_upload_requires_project_crs_match(tmp_path, monkeypatch):
         [
             {"authority": "EPSG", "code": 32650, "wkt": None, "axis_order": "xy"},
             None,
+            None,
+            None,
             {"authority": "EPSG", "code": 32651, "wkt": None, "axis_order": "xy"},
         ]
     )
@@ -222,15 +224,56 @@ def test_shapefile_upload_requires_project_crs_match(tmp_path, monkeypatch):
     assert ok.status_code == 200, ok.get_json()
     assert ok.get_json()["shapefile_crs"]["code"] == 32650
     assert ok.get_json()["geology_model"]["boundary"]["geometry"]["type"] == "Polygon"
+    ok_boundary = ok.get_json()["geology_model"]["boundary"]
 
     missing_zip = shapefile_zip(tmp_path / "missing")
+    missing_bytes = missing_zip.read_bytes()
     missing = client.post(
         "/upload-shapefile",
-        data={"project_id": project["project_id"], "file": (io.BytesIO(missing_zip.read_bytes()), "missing.zip")},
+        data={"project_id": project["project_id"], "file": (io.BytesIO(missing_bytes), "missing.zip")},
         content_type="multipart/form-data",
     )
+    missing_body = missing.get_data(as_text=True)
     assert missing.status_code == 400
     assert missing.get_json()["code"] == "shapefile_crs_missing"
+    assert "Traceback" not in missing_body
+    assert str(tmp_path) not in missing_body
+    active_after_missing = client.get(f"/projects/{project['project_id']}/geology-models/active")
+    assert active_after_missing.status_code == 200
+    assert active_after_missing.get_json()["geology_model"]["boundary"] == ok_boundary
+
+    confirmed_missing = client.post(
+        "/upload-shapefile",
+        data={
+            "project_id": project["project_id"],
+            "assume_project_crs": "true",
+            "file": (io.BytesIO(missing_bytes), "missing.zip"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert confirmed_missing.status_code == 200, confirmed_missing.get_json()
+    confirmed_data = confirmed_missing.get_json()
+    assert confirmed_data["shapefile_crs"]["code"] == 32650
+    assert confirmed_data["shapefile_crs"]["source"] == "user_confirmed_project_crs"
+    last_source = confirmed_data["geology_model"]["provenance"]["last_boundary_source"]
+    assert last_source["crs_source"] == "user_confirmed_project_crs"
+    assert last_source["file_crs_missing"] is True
+    assert last_source["declared_project_crs"] == project["crs"]
+
+    next_missing_zip = shapefile_zip(tmp_path / "next_missing")
+    next_missing = client.post(
+        "/upload-shapefile",
+        data={"project_id": project["project_id"], "file": (io.BytesIO(next_missing_zip.read_bytes()), "next_missing.zip")},
+        content_type="multipart/form-data",
+    )
+    assert next_missing.status_code == 400
+    assert next_missing.get_json()["code"] == "shapefile_crs_missing"
+    active_after_scoped_missing = client.get(f"/projects/{project['project_id']}/geology-models/active")
+    assert active_after_scoped_missing.status_code == 200
+    assert (
+        active_after_scoped_missing.get_json()["geology_model"]["provenance"]["last_boundary_source"]
+        == last_source
+    )
 
     mismatch_zip = shapefile_zip(tmp_path / "mismatch")
     mismatch = client.post(

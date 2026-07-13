@@ -65,6 +65,7 @@
             :kCells="kCells"
             :faults="faults"
             :projectId="projectId"
+            :projectCrs="currentProject ? currentProject.crs : null"
           />
           
           <div class="step-divider">
@@ -134,6 +135,7 @@
             :kCells="kCells"
             :faults="faults"
             :projectId="projectId"
+            :projectCrs="currentProject ? currentProject.crs : null"
           />
         </el-card>
 

@@ -5,8 +5,7 @@
         :action="`${apiBaseUrl}/upload-shapefile`"
         :data="uploadData"
         :show-file-list="false"
-        :on-success="onUploadSuccess"
-        :on-error="onUploadError"
+        :http-request="uploadBoundaryFile"
         :before-upload="beforeUpload"
         accept=".zip"
       >
@@ -49,6 +48,7 @@
 </template>
 
 <script>
+import axios from 'axios';
 import Plotly from 'plotly.js-dist-min';
 
 export default {
@@ -58,7 +58,8 @@ export default {
     wells: Array,
     kCells: Array,
     faults: Array, // 新增：接收断层数据
-    projectId: { type: String, default: null }
+    projectId: { type: String, default: null },
+    projectCrs: { type: Object, default: null }
   },
   data() {
     return {
@@ -69,6 +70,8 @@ export default {
       centerPoints: null,
       gridInfo: null,
       clickedCell: null,
+      pendingBoundaryFile: null,
+      pendingBoundaryContext: null,
       dragState: { isDragging: false, startX: 0, startY: 0, startRangeX: null, startRangeY: null }
     };
   },
@@ -106,31 +109,121 @@ export default {
       }
       const ok = file.name.toLowerCase().endsWith('.zip');
       if (!ok) this.$message.error('请上传包含 Shapefile 的 .zip 文件');
+      if (ok) {
+        this.pendingBoundaryFile = file;
+        this.pendingBoundaryContext = this.currentUploadContext();
+      }
       return ok;
     },
+    normalizedProjectCrs() {
+      if (!this.projectCrs) return null;
+      return {
+        authority: this.projectCrs.authority || null,
+        code: this.projectCrs.code === undefined ? null : this.projectCrs.code,
+        wkt: this.projectCrs.wkt || null,
+        axis_order: this.projectCrs.axis_order || 'xy'
+      };
+    },
+    currentUploadContext() {
+      return {
+        project_id: this.projectId || '',
+        project_crs: this.normalizedProjectCrs()
+      };
+    },
+    contextSignature(context) {
+      return JSON.stringify(context || this.currentUploadContext());
+    },
+    async uploadBoundaryFile(options) {
+      const uploadContext = this.pendingBoundaryContext || this.currentUploadContext();
+      const formData = new FormData();
+      formData.append('file', options.file, options.file.name || 'boundary.zip');
+      formData.append('project_id', uploadContext.project_id);
+      try {
+        const response = await axios.post(`${this.apiBaseUrl}/upload-shapefile`, formData);
+        this.handleBoundaryUploadResponse(response.data, options.file, uploadContext);
+        if (options.onSuccess) options.onSuccess(response.data, options.file);
+      } catch (error) {
+        const payload = error.response && error.response.data ? error.response.data : null;
+        if (this.handleBoundaryUploadResponse(payload, options.file, uploadContext)) {
+          return;
+        }
+        if (options.onError) options.onError(error, options.file);
+        this.$message.error((payload && payload.error) || '边界上传失败，请检查后端服务和 ZIP 文件');
+      }
+    },
+    handleBoundaryUploadResponse(res, file, uploadContext) {
+      if (res && res.success) {
+        this.applyBoundaryUploadResult(res);
+        return true;
+      }
+      if (res && res.code === 'shapefile_crs_missing') {
+        this.confirmMissingCrsAndRetry(file || this.pendingBoundaryFile, uploadContext || this.pendingBoundaryContext);
+        return true;
+      }
+      return false;
+    },
     onUploadSuccess(res) {
-      if (res.success) {
-        this.boundary = res.data;
-        this.gridLines = null; this.centerPoints = null; this.gridInfo = null; this.clickedCell = null;
-        this.$emit('boundary-loaded', {
-          coords: this.boundary,
-          geology_model: res.geology_model,
-          diagnostics: res.diagnostics,
-          boundary_feature: res.boundary_feature,
-          shapefile_crs: res.shapefile_crs
-        });
-        this.drawMap();
-      } else {
-        this.$message.error(res.error || '边界解析失败');
+      if (!this.handleBoundaryUploadResponse(res, this.pendingBoundaryFile, this.pendingBoundaryContext)) {
+        this.$message.error((res && res.error) || '边界解析失败');
       }
     },
     onUploadError(err) {
-      let message = '边界上传失败，请检查后端服务和 ZIP 文件';
+      const payload = err && err.response && err.response.data ? err.response.data : null;
+      if (this.handleBoundaryUploadResponse(payload, this.pendingBoundaryFile, this.pendingBoundaryContext)) {
+        return;
+      }
+      this.$message.error('边界上传失败，请检查后端服务和 ZIP 文件');
+    },
+    applyBoundaryUploadResult(res) {
+      this.boundary = res.data;
+      this.gridLines = null; this.centerPoints = null; this.gridInfo = null; this.clickedCell = null;
+      this.$emit('boundary-loaded', {
+        coords: this.boundary,
+        geology_model: res.geology_model,
+        diagnostics: res.diagnostics,
+        boundary_feature: res.boundary_feature,
+        shapefile_crs: res.shapefile_crs
+      });
+      this.drawMap();
+    },
+    async confirmMissingCrsAndRetry(file, uploadContext) {
+      if (!file) {
+        this.$message.error('Shapefile 缺少 CRS，请补充 .prj 后重试');
+        return;
+      }
+      const confirmedContext = uploadContext || this.pendingBoundaryContext || this.currentUploadContext();
       try {
-        const response = err && err.target && err.target.response ? JSON.parse(err.target.response) : null;
-        if (response && response.error) message = response.error;
-      } catch(e) {}
-      this.$message.error(message);
+        await this.$confirm(
+          '该 Shapefile 缺少 .prj/CRS 信息。是否确认按当前工程 CRS 导入？请只在你确定该文件坐标系与当前工程一致时继续。',
+          '确认坐标系',
+          {
+            confirmButtonText: '按当前工程 CRS 导入',
+            cancelButtonText: '取消',
+            type: 'warning'
+          }
+        );
+      } catch (e) {
+        return;
+      }
+      if (this.contextSignature(confirmedContext) !== this.contextSignature(this.currentUploadContext())) {
+        this.$message.warning('当前工程或 CRS 已改变，请重新上传并确认 CRS');
+        return;
+      }
+      const formData = new FormData();
+      formData.append('file', file, file.name || 'boundary.zip');
+      formData.append('project_id', confirmedContext.project_id);
+      formData.append('assume_project_crs', 'true');
+      try {
+        const response = await axios.post(`${this.apiBaseUrl}/upload-shapefile`, formData);
+        if (response.data && response.data.success) {
+          this.applyBoundaryUploadResult(response.data);
+          this.$message.success('已按当前工程 CRS 导入边界');
+        } else {
+          this.$message.error(response.data?.error || '边界解析失败');
+        }
+      } catch (error) {
+        this.$message.error(error.response?.data?.error || '边界上传失败');
+      }
     },
     // 新增：断层文件上传前校验
     beforeFaultUpload(file) { 
